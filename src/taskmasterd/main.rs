@@ -7,5 +7,5 @@ fn main() {
     let config = yaml_rust::YamlLoader::load_from_str(config_file.as_str())
         .expect("Could not parse config file.");
 
-    println!("{:?}", config[0]);
+    println!("{:?}", config);
 }

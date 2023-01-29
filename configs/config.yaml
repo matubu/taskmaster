@@ -33,3 +33,8 @@ vogsphere:
   stoptime: 10
   stdout: /tmp/vgsworker.stdout
   stderr: /tmp/vgsworker.stderr
+
+---
+
+brr:
+  cmd: brr

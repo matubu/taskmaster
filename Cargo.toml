@@ -3,7 +3,16 @@ name = "taskmaster"
 version = "0.1.0"
 edition = "2021"
 
+[[bin]]
+name = "taskmasterctl"
+path = "src/taskmasterctl/main.rs"
+
+[[bin]]
+name = "taskmasterd"
+path = "src/taskmasterd/main.rs"
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 yaml-rust = "0.4"
+rustyline = "10.1.1"
