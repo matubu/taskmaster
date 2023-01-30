@@ -16,3 +16,4 @@ path = "src/taskmasterd/main.rs"
 [dependencies]
 yaml-rust = "0.4"
 rustyline = "10.1.1"
+syntect = "5.0.0"
