@@ -17,9 +17,16 @@ use std::{borrow::Cow::{self, Owned}, path::PathBuf, fs};
 use std::io::{Write};
 use std::os::unix::net::UnixStream;
 
+enum Status {
+	None,
+	Success,
+	Error,
+}
+
 struct TaskmasterHelper {
 	highlighter: TaskmasterHighlighter,
-	completion: FilenameCompleter
+	completion: FilenameCompleter,
+	status: Status,
 }
 
 impl Completer for TaskmasterHelper {
@@ -57,7 +64,11 @@ impl Highlighter for TaskmasterHelper {
 			prompt: &'p str,
 			default: bool,
 		) -> Cow<'b, str> {
-		Owned("\x1b[1;94m".to_owned() + prompt + "\x1b[0m")
+		match self.status {
+			Status::None => Owned("\x1b[1;94m".to_owned() + prompt + "\x1b[0m"),
+			Status::Success => Owned("\x1b[1;92m".to_owned() + prompt + "\x1b[0m"),
+			Status::Error => Owned("\x1b[1;91m".to_owned() + prompt + "\x1b[0m"),
+		}
 	}
 
 	fn highlight_hint<'h>(&self, hint: &'h str) -> Cow<'h, str> {
@@ -117,7 +128,8 @@ fn main() {
 
 	let helper = TaskmasterHelper {
 		highlighter: TaskmasterHighlighter::new(),
-		completion:  FilenameCompleter::new()
+		completion:  FilenameCompleter::new(),
+		status: Status::None
 	};
 	let mut rl = rustyline::Editor::<TaskmasterHelper>::new().unwrap();
 
@@ -125,11 +137,17 @@ fn main() {
 	rl.set_helper(Some(helper));
 
 	loop {
-		let readline = rl.readline("> ");
+		let readline = rl.readline("$> ");
 
 		match readline {
 			Ok(line) => {
 				rl.add_history_entry(line.as_str());
+
+				rl.helper_mut().unwrap().status = Status::None;
+
+				if line.is_empty() {
+					continue;
+				}
 
 				match parse_line(line.as_str()) {
 					Ok(request) => {
@@ -138,14 +156,21 @@ fn main() {
 
 						match bincode::deserialize_from::<&UnixStream, TaskmasterDaemonResult>(&mut stream).unwrap() {
 							TaskmasterDaemonResult::Ok(s) => {
+								println!("{s}");
+								rl.helper_mut().unwrap().status = Status::Success;
+							},
+							TaskmasterDaemonResult::Raw(s) => {
 								print!("{s}");
+								rl.helper_mut().unwrap().status = Status::Success;
 							},
 							TaskmasterDaemonResult::Err(err) => {
 								eprintln!("Error: {err}");
+								rl.helper_mut().unwrap().status = Status::Error;
 							}
 						}
 					}
 					Err(err) => {
+						rl.helper_mut().unwrap().status = Status::Error;
 						eprintln!("Error: {err}")
 					}
 				}

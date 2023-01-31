@@ -24,7 +24,7 @@ macro_rules! get_optional (
 	)
 );
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Clone, Debug)]
 struct TaskOptions {
 	argv: Vec<String>,
 	numprocs: i64,
@@ -50,9 +50,16 @@ impl Task {
 		}
 	}
 
+	fn clone_options(&self) -> Task {
+		Task {
+			options: self.options.clone(),
+			processes: Vec::new(),
+		}
+	}
+
 	fn start(&mut self) {
 		println!("start task...");
-		for i in 0..self.options.numprocs {
+		for i in self.processes.len()..self.options.numprocs as usize {
 			self.spawn_single()
 		}
 	}
@@ -61,6 +68,7 @@ impl Task {
 		for child in &mut self.processes {
 			child.kill().expect("Could not kill child process.");
 		}
+		self.processes = Vec::new();
 	}
 
 	fn update(&mut self, options: TaskOptions) {
@@ -78,10 +86,11 @@ impl Task {
 		while i < self.processes.len() {
 			let child = &mut self.processes[i];
 			if let Ok(Some(status)) = child.try_wait() {
+				let code = status.code();
 				if status.success() {
-					println!("\"{name}\"[{i}] exited with status code {code}", name = self.options.argv[0], code = status.code().unwrap());
+					println!("\"{name}\"[{i}] exited with status code {code:?}", name = self.options.argv[0]);
 				} else {
-					println!("\"{name}\"[{i}] exited with status code {code}", name = self.options.argv[0], code = status.code().unwrap());
+					println!("\"{name}\"[{i}] exited with status code {code:?}", name = self.options.argv[0]);
 				}
 				self.processes.remove(i);
 				self.spawn_single();
@@ -163,13 +172,24 @@ impl TaskFile {
 	}
 
 	fn update(&mut self, updated_task_file: TaskFile) {
-		// TODO smart update
-		self.stop();
-		self.tasks = updated_task_file.tasks;
-		self.start();
+		let mut new_tasks = HashMap::new();
+
+		for (name, task) in updated_task_file.tasks.iter() {
+			if let Some(mut old_task) = self.tasks.remove(name) {
+				old_task.update(task.options.clone());
+				new_tasks.insert(name.to_owned(), old_task);
+			} else {
+				new_tasks.insert(name.to_owned(), task.clone_options());
+			}
+		}
+
+		for task in self.tasks.values_mut() {
+			task.stop();
+		}
+
+		self.tasks = new_tasks;
 	}
 
-	// Check if their was any change in the file
 	fn reload(&mut self) {
 		if let Ok(task_file) = TaskFile::from_yaml(&self.path) {
 			self.update(task_file);
@@ -233,7 +253,20 @@ fn handle_client_request(tasks: &mut MutexGuard<TaskFiles>, req: TaskmasterDaemo
 					status.push_str(&format!("{}: {}: {:?}\n", task_file.path, name, task.processes.iter().map(|p| p.id()).collect::<Vec<u32>>()));
 				}
 			}
-			TaskmasterDaemonResult::Ok(status)
+			TaskmasterDaemonResult::Raw(status)
+		},
+		TaskmasterDaemonRequest::Reload => {
+			for task_file in tasks.tasks_files.values_mut() {
+				task_file.reload();
+			}
+			TaskmasterDaemonResult::Ok("ok".to_owned())
+		},
+		TaskmasterDaemonRequest::Restart => {
+			for task_file in tasks.tasks_files.values_mut() {
+				task_file.stop();
+				task_file.start();
+			}
+			TaskmasterDaemonResult::Ok("ok".to_owned())
 		},
 		TaskmasterDaemonRequest::LoadFile(path) => {
 			tasks.load(&path);
@@ -248,11 +281,6 @@ fn handle_client_request(tasks: &mut MutexGuard<TaskFiles>, req: TaskmasterDaemo
 }
 
 fn main() {
-	// let config_path = "configs/config.yaml".try_resolve()
-	//     .expect("Could not resolve config file path.").into_owned();
-
-	// println!("Config file: {:?}", config_path);
-
 	let listener = bind("/tmp/taskmasterd.sock").expect("Could not create unix socket");
 
 	// TODO pid file ?
@@ -268,14 +296,11 @@ fn main() {
 
 	let tasks = Arc::new(Mutex::new(TaskFiles::new()));
 
-	// TODO should be the client that load/unload the config file
-	// tasks.load(config_path.to_str().unwrap());
-
-	println!("Starting health check loop...");
-
 	{
 		let tasks = tasks.clone();
 		thread::spawn(move || {
+			println!("Starting health check loop...");
+
 			loop {
 				tasks.lock().unwrap().health_check();
 				thread::sleep(Duration::from_nanos(500_000));
@@ -283,6 +308,7 @@ fn main() {
 		});
 	}
 
+	println!("Starting listener loop...");
 	for stream in listener.incoming() {
 		match stream {
 			Ok(mut stream) => {

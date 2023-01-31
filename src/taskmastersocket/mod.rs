@@ -19,5 +19,6 @@ pub enum TaskmasterDaemonRequest {
 #[derive(Serialize, Deserialize, Debug)]
 pub enum TaskmasterDaemonResult {
 	Ok(String),
+	Raw(String),
 	Err(String),
 }
