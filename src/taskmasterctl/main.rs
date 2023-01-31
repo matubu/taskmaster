@@ -11,6 +11,9 @@ use rustyline::{
 
 use std::borrow::Cow::{self, Owned};
 
+use std::io::{Read, Write};
+use std::os::unix::net::UnixStream;
+
 struct TaskmasterHelper {
 	highlighter: TaskmasterHighlighter,
 	completion: FilenameCompleter
@@ -90,6 +93,39 @@ fn main() {
 			Ok(line) => {
 				rl.add_history_entry(line.as_str());
 				println!("Line: {}", line);
+
+				let request = match line.as_str() {
+                    "status" => TaskmasterDaemonRequest::Status,
+                    "reload" => TaskmasterDaemonRequest::Reload,
+                    "restart" => TaskmasterDaemonRequest::Restart,
+                    _ => {
+                        let parts: Vec<&str> = line.split_whitespace().collect();
+                        if parts.len() < 2 {
+                            println!("Invalid command");
+                            continue;
+                        }
+                        match parts[0] {
+                            "start" => TaskmasterDaemonRequest::Start(parts[1].to_owned()),
+                            "stop" => TaskmasterDaemonRequest::Stop(parts[1].to_owned()),
+                            "restart" => TaskmasterDaemonRequest::Restart(parts[1].to_owned()),
+                            "load" => TaskmasterDaemonRequest::Load(parts[1].to_owned()),
+                            "unload" => TaskmasterDaemonRequest::Unload(parts[1].to_owned()),
+                            "reload" => TaskmasterDaemonRequest::Reload(parts[1].to_owned()),
+                            _ => {
+                                println!("Invalid command");
+                                continue;
+                            }
+						}
+					}
+				};
+				
+				// TODO: CHANGE THE PATH!!!
+				let mut stream = UnixStream::connect("/path/to/socket").unwrap();
+                bincode::serialize_into(&mut stream, &request).unwrap();
+                stream.flush().unwrap();
+
+                let response: TaskmasterResponse = bincode::deserialize_from(&mut stream).unwrap();
+                println!("Response: {:?}", response);
 			},
 			Err(err) => {
 				println!("Error: {:?}", err);
