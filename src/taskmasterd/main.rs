@@ -1,7 +1,7 @@
 extern crate taskmastersocket;
 use taskmastersocket::{TaskmasterDaemonRequest, TaskmasterDaemonResult};
 
-use std::{collections::HashMap, process::Child, fs::File};
+use std::{collections::HashMap, process::Child, fs::File, os::unix::net::{UnixListener, UnixStream}, thread};
 
 use daemonize::Daemonize;
 use resolve_path::PathResolveExt;
@@ -219,11 +219,19 @@ impl TaskFiles {
     }
 }
 
-fn main() {
-    let config_path = "configs/config.yaml".try_resolve()
-        .expect("Could not resolve config file path.").into_owned();
+fn bind(path: &str) -> std::io::Result<UnixListener> {
+    std::fs::remove_file(path)?;
+    UnixListener::bind(path)
+}
 
-    println!("Config file: {:?}", config_path);
+
+fn main() {
+    // let config_path = "configs/config.yaml".try_resolve()
+    //     .expect("Could not resolve config file path.").into_owned();
+
+    // println!("Config file: {:?}", config_path);
+
+    let listener = bind("/tmp/taskmasterd.sock").expect("Could not create unix socket");
 
     // TODO pid file ?
     // let stdout = File::create("/tmp/taskmasterd.out").unwrap();
@@ -239,11 +247,40 @@ fn main() {
     let mut tasks = TaskFiles::new();
 
     // TODO should be the client that load/unload the config file
-    tasks.load(config_path.to_str().unwrap());
+    // tasks.load(config_path.to_str().unwrap());
 
     println!("Starting health check loop...");
 
-    loop {
-        tasks.health_check();
+    thread::spawn(move || {
+        loop {
+            tasks.health_check();
+        }
+    });
+
+    for stream in listener.incoming() {
+        match stream {
+            Ok(stream) => {
+                /* connection succeeded */
+                thread::spawn(move || {
+                    loop {
+                        if let Ok(request) = bincode::deserialize_from::<&UnixStream, TaskmasterDaemonRequest>(&stream) {
+                            // let mut response = String::new();
+                            // stream.read_to_string(&mut response)?;
+                            println!("read {:?}", request);
+                            
+                        } else {
+                            if let Err(e) = stream.shutdown(std::net::Shutdown::Both) {
+                                eprintln!("Failed to shutdown stream: {}", e);
+                            }
+                            break ;
+                        }
+                    }
+                });
+            }
+            Err(err) => {
+                eprintln!("Failed to connect: {}", err);
+                break;
+            }
+        }
     }
 }

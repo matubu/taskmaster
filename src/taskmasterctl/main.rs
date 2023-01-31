@@ -123,7 +123,7 @@ fn main() {
 				};
 				
 				// TODO: CHANGE THE PATH!!!
-				let mut stream = UnixStream::connect("/path/to/socket").unwrap();
+				let mut stream = UnixStream::connect("/tmp/taskmasterd.sock").unwrap();
 				bincode::serialize_into(&mut stream, &request).unwrap();
 				stream.flush().unwrap();
 
