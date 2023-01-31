@@ -7,15 +7,15 @@ use yaml_rust::Yaml;
 macro_rules! get_required (
     ($yaml:ident, $key:tt, $convert:ident) => (
         $yaml.remove(&Yaml::String($key.to_owned()))
-            .expect(concat!("convert a ", $key)).$convert()
-            .expect(concat!($key, "convert as ", stringify!($convert))).to_owned()
+            .ok_or(concat!("convert a ", $key))?.$convert()
+            .ok_or(concat!($key, "convert as ", stringify!($convert)))?.to_owned()
     )
 );
 
 macro_rules! get_optional (
     ($yaml:ident, $key:tt, $convert:ident, $default:expr) => (
         if let Some(value) = $yaml.remove(&Yaml::String($key.to_owned())) {
-            value.$convert().expect(concat!($key, "convert as ", stringify!($convert))).to_owned()
+            value.$convert().ok_or(concat!($key, "convert as ", stringify!($convert)))?.to_owned()
         } else {
             $default
         }
@@ -34,7 +34,6 @@ struct Task {
 }
 
 impl Task {
-    // TODO avoid respawn when command does not exit
     fn spawn_single(&mut self) {
         match std::process::Command::new(&self.options.argv[0])
             .args(&self.options.argv[1..])
@@ -83,13 +82,9 @@ impl Task {
                     println!("\"{name}\"[{i}] exited with status code {code}", name = self.options.argv[0], code = status.code().unwrap());
                 }
                 self.processes.remove(i);
-            } else {
-                i += 1;
+                self.spawn_single();
             }
-        }
-
-        for _ in self.processes.len()..self.options.numprocs as usize {
-            self.spawn_single();
+            i += 1;
         }
     }
 }
@@ -116,14 +111,16 @@ impl TaskFile {
         for doc in config {
             if let Some(programs) = doc["programs"].as_hash() {
                 for (key, value) in programs {
-                    let name = key.as_str().expect("Expect a program name.");
-                    let mut program = value.as_hash().expect("convert a program.").clone();
+                    let name = key.as_str()
+                        .ok_or("Expect a program name.")?;
+                    let mut program = value.as_hash()
+                        .ok_or("convert a program.")?.clone();
 
                     let cmd = get_required!(program, "cmd", as_str);
                     let numprocs = get_optional!(program, "numprocs", as_i64, 1);
 
                     for key in program.keys() {
-                        eprintln!("\x1b[93m[Warning]\x1b[0m the {} value was ignored for \"{}\"", key.as_str().unwrap(), name);
+                        eprintln!("\x1b[93m[Warning]\x1b[0m the {} value was ignored for \"{}\"", key.as_str().ok_or("Failed to convert to string")?, name);
                     }
 
                     let argv = cmd.split_whitespace().collect::<Vec<&str>>()
@@ -226,13 +223,13 @@ fn main() {
     println!("Config file: {:?}", config_path);
 
     // TODO pid file ?
-    let stdout = File::create("/tmp/taskmasterd.out").unwrap();
-    let stderr = File::create("/tmp/taskmasterd.err").unwrap();
-    let daemonize = Daemonize::new()
-        .stdout(stdout)
-        .stderr(stderr);
+    // let stdout = File::create("/tmp/taskmasterd.out").unwrap();
+    // let stderr = File::create("/tmp/taskmasterd.err").unwrap();
+    // let daemonize = Daemonize::new()
+    //     .stdout(stdout)
+    //     .stderr(stderr);
 
-    daemonize.start().expect("Failed to daemonize");
+    // daemonize.start().expect("Failed to daemonize");
 
     println!("Starting taskmasterd...");
 

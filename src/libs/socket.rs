@@ -1,4 +1,4 @@
-pub enum TaskmasterRequest {
+pub enum TaskmasterDaemonRequest {
 	Status,  // get the status of all process
 	Reload,  // reload all the configs and restart the processes
 	Restart, // restart all the processes
@@ -14,7 +14,7 @@ pub enum TaskmasterRequest {
 	// Logs(String),
 }
 
-pub enum TaskmasterResponse {
-	Ok(String),
-	Err(String),
+pub enum TaskmasterDaemonResult {
+	Success(String),
+	Fail(String),
 }
