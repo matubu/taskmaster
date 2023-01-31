@@ -3,82 +3,29 @@ use highlighter::{TaskmasterHighlighter};
 
 use rustyline::{
 	highlight::Highlighter,
-	completion::{Completer, Candidate},
-	hint::{Hinter, Hint},
+	completion::{Completer, FilenameCompleter, self},
+	hint::{Hinter},
 	validate::{self, Validator},
 	line_buffer::LineBuffer, Helper, config::Configurer
 };
 
 use std::borrow::Cow::{self, Owned};
 
-#[derive(Debug, PartialEq, Eq)]
-struct CommandHint {
-	display: String,
-	replace: String,
-}
-
-impl CommandHint {
-	fn new(text: &str) -> CommandHint {
-		CommandHint {
-			display: text.into(),
-			replace: text.into(),
-		}
-	}
-
-	fn suffix(&self, strip_chars: usize) -> CommandHint {
-		CommandHint {
-			display: self.display.clone(),
-			replace: self.display[strip_chars..].to_owned(),
-		}
-	}
-}
-
-impl Hint for CommandHint {
-	fn display(&self) -> &str {
-		&self.replace
-	}
-
-	fn completion(&self) -> Option<&str> {
-		Some(&self.replace)
-	}
-}
-impl Candidate for CommandHint {
-	fn display(&self) -> &str {
-		&self.display
-	}
-
-	fn replacement(&self) -> &str {
-		&self.replace
-	}
-}
-
 struct TaskmasterHelper {
-	hints: Vec<CommandHint>,
 	highlighter: TaskmasterHighlighter,
+	completion: FilenameCompleter
 }
 
 impl Completer for TaskmasterHelper {
-	type Candidate = CommandHint;
+	type Candidate = completion::Pair;
 
 	fn complete(
-			&self, // FIXME should be `&mut self`
+			&self,
 			line: &str,
 			pos: usize,
 			ctx: &rustyline::Context<'_>,
 		) -> rustyline::Result<(usize, Vec<Self::Candidate>)> {
-		let candidates: Vec<CommandHint> = self.hints
-			.iter()
-			.filter_map(|hint| {
-				// expect hint after word complete, like redis cli, add condition:
-				// line.ends_with(" ")
-				if hint.display.starts_with(line) {
-					Some(hint.suffix(pos))
-				} else {
-					None
-				}
-			})
-			.collect();
-		Ok((pos, candidates))
+		self.completion.complete(line, pos, ctx)
 	}
 	fn update(&self, line: &mut LineBuffer, start: usize, elected: &str) {
 		let end = line.pos();
@@ -87,25 +34,10 @@ impl Completer for TaskmasterHelper {
 }
 
 impl Hinter for TaskmasterHelper {
-	type Hint = CommandHint;
+	type Hint = String;
 
-	fn hint(&self, line: &str, pos: usize, _ctx: &rustyline::Context<'_>) -> Option<CommandHint> {
-		if line.is_empty() || pos < line.len() {
-			return None;
-		}
-
-		self.hints
-			.iter()
-			.filter_map(|hint| {
-				// expect hint after word complete, like redis cli, add condition:
-				// line.ends_with(" ")
-				if hint.display.starts_with(line) {
-					Some(hint.suffix(pos))
-				} else {
-					None
-				}
-			})
-			.next()
+	fn hint(&self, line: &str, pos: usize, _ctx: &rustyline::Context<'_>) -> Option<String> {
+		None
 	}
 }
 
@@ -133,49 +65,18 @@ impl Highlighter for TaskmasterHelper {
 
 impl Validator for TaskmasterHelper {
 	fn validate(&self, ctx: &mut validate::ValidationContext) -> rustyline::Result<validate::ValidationResult> {
-		use validate::ValidationResult::{Incomplete, Invalid, Valid};
+		use validate::ValidationResult::{Valid};
 
-		let input = ctx.input();
-		let result = if !input.starts_with("SELECT") {
-			Invalid(Some("\x1b[91m < Expect: SELECT stmt\x1b[0m".to_owned()))
-		} else if !input.ends_with(';') {
-			Incomplete
-		} else {
-			Valid(None)
-		};
-		Ok(result)
+		Ok(Valid(None))
 	}
 }
 
 impl Helper for TaskmasterHelper {}
 
-fn get_taskmaster_hints() -> Vec<CommandHint> {
-	let mut set = Vec::new();
-
-	set.push(CommandHint::new("help"));
-
-	set.push(CommandHint::new("global [status|start|stop|restart]"));
-
-	set.push(CommandHint::new("status <name>"));
-	set.push(CommandHint::new("start <name>"));
-	set.push(CommandHint::new("stop <name>"));
-	set.push(CommandHint::new("restart <name>"));
-
-	set.push(CommandHint::new("list [all|running|stopped|configs]"));
-
-	set.push(CommandHint::new("load <config>"));
-	set.push(CommandHint::new("unload <config>"));
-	set.push(CommandHint::new("reload <config>"));
-
-	set.push(CommandHint::new("logs <name>"));
-
-	set
-}
-
 fn main() {
 	let helper = TaskmasterHelper {
-		hints:       get_taskmaster_hints(),
 		highlighter: TaskmasterHighlighter::new(),
+		completion:  FilenameCompleter::new()
 	};
 	let mut rl = rustyline::Editor::<TaskmasterHelper>::new().unwrap();
 

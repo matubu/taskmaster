@@ -78,9 +78,9 @@ impl Task {
             let child = &mut self.processes[i];
             if let Ok(Some(status)) = child.try_wait() {
                 if status.success() {
-                    println!("\"{name}\"[{i}] exited with status code {code}", name = self.options.argv[0], i = i, code = status.code().unwrap());
+                    println!("\"{name}\"[{i}] exited with status code {code}", name = self.options.argv[0], code = status.code().unwrap());
                 } else {
-                    println!("\"{name}\"[{i}] exited with status code {code}", name = self.options.argv[0], i = i, code = status.code().unwrap());
+                    println!("\"{name}\"[{i}] exited with status code {code}", name = self.options.argv[0], code = status.code().unwrap());
                 }
                 self.processes.remove(i);
             } else {
@@ -95,51 +95,52 @@ impl Task {
 }
 
 struct TaskFile {
-    name: String,
+    absolute_path: String,
     tasks: HashMap<String, Task>,
 }
 
 impl TaskFile {
-    fn from_yaml(absolute_path: &str) -> TaskFile {
+    // TODO remove unwrap and expect
+    fn from_yaml(absolute_path: &str) -> Result<TaskFile, &str> {
         let mut task_file = TaskFile {
-            name: absolute_path.to_owned(),
+            absolute_path: absolute_path.to_owned(),
             tasks: HashMap::new(),
         };
 
         let config_file = std::fs::read_to_string(absolute_path)
-            .expect("Could not read config file.");
+            .map_err(|_| "Could not open file.")?;
 
         let config = yaml_rust::YamlLoader::load_from_str(config_file.as_str())
-            .expect("Could not parse config file.");
+            .map_err(|_| "Could not parse config file.")?;
 
         for doc in config {
-            let programs = doc["programs"].as_hash().expect("convert a list of programs.");
-            
-            for (key, value) in programs {
-                let name = key.as_str().expect("Expect a program name.");
-                let mut program = value.as_hash().expect("convert a program.").clone();
+            if let Some(programs) = doc["programs"].as_hash() {
+                for (key, value) in programs {
+                    let name = key.as_str().expect("Expect a program name.");
+                    let mut program = value.as_hash().expect("convert a program.").clone();
 
-                let cmd = get_required!(program, "cmd", as_str);
-                let numprocs = get_optional!(program, "numprocs", as_i64, 1);
+                    let cmd = get_required!(program, "cmd", as_str);
+                    let numprocs = get_optional!(program, "numprocs", as_i64, 1);
 
-                for key in program.keys() {
-                    eprintln!("\x1b[93m[Warning]\x1b[0m the {} value was ignored for \"{}\"", key.as_str().unwrap(), name);
+                    for key in program.keys() {
+                        eprintln!("\x1b[93m[Warning]\x1b[0m the {} value was ignored for \"{}\"", key.as_str().unwrap(), name);
+                    }
+
+                    let argv = cmd.split_whitespace().collect::<Vec<&str>>()
+                            .iter().map(|s| (*s).to_owned()).collect();
+
+                    task_file.add_task(name, Task {
+                        options: TaskOptions {
+                            argv: argv,
+                            numprocs: numprocs,
+                        },
+                        processes: Vec::new(),
+                    });
                 }
-
-                let argv = cmd.split_whitespace().collect::<Vec<&str>>()
-                        .iter().map(|s| (*s).to_owned()).collect();
-
-                task_file.add_task(name, Task {
-                    options: TaskOptions {
-                        argv: argv,
-                        numprocs: numprocs,
-                    },
-                    processes: Vec::new(),
-                });
             }
         }
 
-        task_file
+        Ok(task_file)
     }
 
     fn add_task(&mut self, name: &str, task: Task) {
@@ -169,6 +170,13 @@ impl TaskFile {
         self.start();
     }
 
+    // Check if their was any change in the file
+    fn reload(&mut self) {
+        if let Ok(task_file) = TaskFile::from_yaml(&self.absolute_path) {
+            self.update(task_file);
+        }
+    }
+
     fn health_check(&mut self) {
         for task in self.tasks.values_mut() {
             task.health_check();
@@ -188,13 +196,13 @@ impl TaskFiles {
     }
 
     fn load(&mut self, absolute_path: &str) {
-        let mut new_task_file = TaskFile::from_yaml(absolute_path);
-
-        if let Some(task_file) = self.tasks_files.get_mut(absolute_path) {
-            task_file.update(new_task_file);
-        } else {
-            new_task_file.start();
-            self.tasks_files.insert(new_task_file.name.clone(), new_task_file);
+        if let Ok(mut new_task_file) = TaskFile::from_yaml(absolute_path) {
+            if let Some(task_file) = self.tasks_files.get_mut(absolute_path) {
+                task_file.update(new_task_file);
+            } else {
+                new_task_file.start();
+                self.tasks_files.insert(new_task_file.absolute_path.clone(), new_task_file);
+            }
         }
     }
 
@@ -212,31 +220,27 @@ impl TaskFiles {
 }
 
 fn main() {
-    let stdout = File::create("/tmp/taskmasterd.out").unwrap();
-    let stderr = File::create("/tmp/taskmasterd.err").unwrap();
-
     let config_path = "configs/config.yaml".try_resolve()
         .expect("Could not resolve config file path.").into_owned();
 
     println!("Config file: {:?}", config_path);
 
     // TODO pid file ?
+    let stdout = File::create("/tmp/taskmasterd.out").unwrap();
+    let stderr = File::create("/tmp/taskmasterd.err").unwrap();
     let daemonize = Daemonize::new()
         .stdout(stdout)
         .stderr(stderr);
 
-    println!("Daemonize...");
-
     daemonize.start().expect("Failed to daemonize");
 
-    println!("Daemonized");
+    println!("Starting taskmasterd...");
 
     let mut tasks = TaskFiles::new();
 
     // TODO should be the client that load/unload the config file
     tasks.load(config_path.to_str().unwrap());
 
-    println!("Loaded config file \"configs/config.yaml\"");
     println!("Starting health check loop...");
 
     loop {
