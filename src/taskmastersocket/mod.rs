@@ -1,3 +1,6 @@
+use serde::{Serialize, Deserialize};
+
+#[derive(Serialize, Deserialize, Debug)]
 pub enum TaskmasterDaemonRequest {
 	Status,  // get the status of all process
 	Reload,  // reload all the configs and restart the processes
@@ -14,6 +17,7 @@ pub enum TaskmasterDaemonRequest {
 	// Logs(String),
 }
 
+#[derive(Serialize, Deserialize, Debug)]
 pub enum TaskmasterDaemonResult {
 	Success(String),
 	Fail(String),
