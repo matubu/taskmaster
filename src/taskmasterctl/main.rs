@@ -103,7 +103,6 @@ fn parse_line(line: &str) -> Result<TaskmasterDaemonRequest, &str> {
 				"restart" => TaskmasterDaemonRequest::RestartProgram(parts[1].to_owned()),
 				"load" => TaskmasterDaemonRequest::LoadFile(resolve_path(parts[1])?),
 				"unload" => TaskmasterDaemonRequest::UnloadFile(resolve_path(parts[1])?),
-				"reload" => TaskmasterDaemonRequest::ReloadFile(resolve_path(parts[1])?),
 				_ => {
 					return Err("Invalid command");
 				}
@@ -131,15 +130,20 @@ fn main() {
 		match readline {
 			Ok(line) => {
 				rl.add_history_entry(line.as_str());
-				println!("Line: {}", line);
 
 				match parse_line(line.as_str()) {
 					Ok(request) => {
 						bincode::serialize_into(&mut stream, &request).unwrap();
 						stream.flush().unwrap();
 
-						let response: TaskmasterDaemonResult = bincode::deserialize_from(&mut stream).unwrap();
-						println!("Response: {:?}", response);
+						match bincode::deserialize_from::<&UnixStream, TaskmasterDaemonResult>(&mut stream).unwrap() {
+							TaskmasterDaemonResult::Ok(s) => {
+								print!("{s}");
+							},
+							TaskmasterDaemonResult::Err(err) => {
+								eprintln!("Error: {err}");
+							}
+						}
 					}
 					Err(err) => {
 						eprintln!("Error: {err}")

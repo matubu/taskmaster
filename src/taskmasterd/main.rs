@@ -1,7 +1,7 @@
 extern crate taskmastersocket;
 use taskmastersocket::{TaskmasterDaemonRequest, TaskmasterDaemonResult};
 
-use std::{collections::HashMap, process::Child, fs::File, os::unix::net::{UnixListener, UnixStream}, thread, io::Write};
+use std::{collections::HashMap, process::Child, fs::File, os::unix::net::{UnixListener, UnixStream}, thread, io::Write, sync::{Mutex, Arc, MutexGuard}, time::Duration};
 
 use daemonize::Daemonize;
 use yaml_rust::Yaml;
@@ -92,19 +92,19 @@ impl Task {
 }
 
 struct TaskFile {
-	absolute_path: String,
+	path: String,
 	tasks: HashMap<String, Task>,
 }
 
 impl TaskFile {
 	// TODO remove unwrap and expect
-	fn from_yaml(absolute_path: &str) -> Result<TaskFile, &str> {
+	fn from_yaml(path: &str) -> Result<TaskFile, &str> {
 		let mut task_file = TaskFile {
-			absolute_path: absolute_path.to_owned(),
+			path: path.to_owned(),
 			tasks: HashMap::new(),
 		};
 
-		let config_file = std::fs::read_to_string(absolute_path)
+		let config_file = std::fs::read_to_string(path)
 			.map_err(|_| "Could not open file.")?;
 
 		let config = yaml_rust::YamlLoader::load_from_str(config_file.as_str())
@@ -171,7 +171,7 @@ impl TaskFile {
 
 	// Check if their was any change in the file
 	fn reload(&mut self) {
-		if let Ok(task_file) = TaskFile::from_yaml(&self.absolute_path) {
+		if let Ok(task_file) = TaskFile::from_yaml(&self.path) {
 			self.update(task_file);
 		}
 	}
@@ -194,19 +194,19 @@ impl TaskFiles {
 		}
 	}
 
-	fn load(&mut self, absolute_path: &str) {
-		if let Ok(mut new_task_file) = TaskFile::from_yaml(absolute_path) {
-			if let Some(task_file) = self.tasks_files.get_mut(absolute_path) {
+	fn load(&mut self, path: &str) {
+		if let Ok(mut new_task_file) = TaskFile::from_yaml(path) {
+			if let Some(task_file) = self.tasks_files.get_mut(path) {
 				task_file.update(new_task_file);
 			} else {
 				new_task_file.start();
-				self.tasks_files.insert(new_task_file.absolute_path.clone(), new_task_file);
+				self.tasks_files.insert(new_task_file.path.clone(), new_task_file);
 			}
 		}
 	}
 
-	fn unload(&mut self, absolute_path: &str) {
-		if let Some(mut deleted) = self.tasks_files.remove(absolute_path) {
+	fn unload(&mut self, path: &str) {
+		if let Some(mut deleted) = self.tasks_files.remove(path) {
 			deleted.stop();
 		}
 	}
@@ -223,9 +223,29 @@ fn bind(path: &str) -> std::io::Result<UnixListener> {
 	UnixListener::bind(path)
 }
 
-// fn handle_client_request(, req: TaskmasterDaemonRequest) -> TaskmasterDaemonResult {
-
-// }
+// TODO error handling load...
+fn handle_client_request(tasks: &mut MutexGuard<TaskFiles>, req: TaskmasterDaemonRequest) -> TaskmasterDaemonResult {
+	match req {
+		TaskmasterDaemonRequest::Status => {
+			let mut status = String::new();
+			for task_file in tasks.tasks_files.values() {
+				for (name, task) in task_file.tasks.iter() {
+					status.push_str(&format!("{}: {}: {:?}\n", task_file.path, name, task.processes.iter().map(|p| p.id()).collect::<Vec<u32>>()));
+				}
+			}
+			TaskmasterDaemonResult::Ok(status)
+		},
+		TaskmasterDaemonRequest::LoadFile(path) => {
+			tasks.load(&path);
+			TaskmasterDaemonResult::Ok("ok".to_owned())
+		},
+		TaskmasterDaemonRequest::UnloadFile(path) => {
+			tasks.unload(&path);
+			TaskmasterDaemonResult::Ok("ok".to_owned())
+		},
+		_ => TaskmasterDaemonResult::Err("Not implemented".to_owned())
+	}
+}
 
 fn main() {
 	// let config_path = "configs/config.yaml".try_resolve()
@@ -246,35 +266,39 @@ fn main() {
 
 	println!("Starting taskmasterd...");
 
-	let mut tasks = TaskFiles::new();
+	let tasks = Arc::new(Mutex::new(TaskFiles::new()));
 
 	// TODO should be the client that load/unload the config file
 	// tasks.load(config_path.to_str().unwrap());
 
 	println!("Starting health check loop...");
 
-	thread::spawn(move || {
-		loop {
-			tasks.health_check();
-		}
-	});
+	{
+		let tasks = tasks.clone();
+		thread::spawn(move || {
+			loop {
+				tasks.lock().unwrap().health_check();
+				thread::sleep(Duration::from_nanos(500_000));
+			}
+		});
+	}
 
 	for stream in listener.incoming() {
 		match stream {
 			Ok(mut stream) => {
-				/* connection succeeded */
+				let tasks = tasks.clone();
 				thread::spawn(move || {
 					loop {
 						if let Ok(request) = bincode::deserialize_from::<&UnixStream, TaskmasterDaemonRequest>(&stream) {
-							// let mut response = String::new();
-							// stream.read_to_string(&mut response)?;
 							println!("read {:?}", request);
 
-							let response = TaskmasterDaemonResult::Ok("This is the server response".to_owned());
+							let response = handle_client_request(
+								&mut tasks.lock().unwrap(),
+								request
+							);
 
 							bincode::serialize_into(&mut stream, &response).unwrap();
 							stream.flush().unwrap();
-
 						} else {
 							if let Err(e) = stream.shutdown(std::net::Shutdown::Both) {
 								eprintln!("Failed to shutdown stream: {}", e);

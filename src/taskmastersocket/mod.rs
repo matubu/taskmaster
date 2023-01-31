@@ -12,7 +12,6 @@ pub enum TaskmasterDaemonRequest {
 
 	LoadFile(String),
 	UnloadFile(String),
-	ReloadFile(String),
 	
 	// Logs(String),
 }
