@@ -571,10 +571,10 @@ dependencies = [
 name = "taskmaster"
 version = "0.1.0"
 dependencies = [
+ "bincode",
  "daemonize",
  "resolve-path",
  "rustyline",
- "serde",
  "syntect",
  "yaml-rust",
 ]

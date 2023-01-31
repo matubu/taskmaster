@@ -3,13 +3,13 @@ pub enum TaskmasterDaemonRequest {
 	Reload,  // reload all the configs and restart the processes
 	Restart, // restart all the processes
 
-	Start(String),
-	Stop(String),
-	Restart(String),
+	StartProgram(String),
+	StopProgram(String),
+	RestartProgram(String),
 
-	Load(String),
-	Unload(String),
-	Reload(String),
+	LoadFile(String),
+	UnloadFile(String),
+	ReloadFile(String),
 	
 	// Logs(String),
 }

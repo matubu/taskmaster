@@ -1,3 +1,6 @@
+extern crate taskmastersocket;
+use taskmastersocket::{TaskmasterDaemonRequest, TaskmasterDaemonResult};
+
 mod highlighter;
 use highlighter::{TaskmasterHighlighter};
 
@@ -95,37 +98,37 @@ fn main() {
 				println!("Line: {}", line);
 
 				let request = match line.as_str() {
-                    "status" => TaskmasterDaemonRequest::Status,
-                    "reload" => TaskmasterDaemonRequest::Reload,
-                    "restart" => TaskmasterDaemonRequest::Restart,
-                    _ => {
-                        let parts: Vec<&str> = line.split_whitespace().collect();
-                        if parts.len() < 2 {
-                            println!("Invalid command");
-                            continue;
-                        }
-                        match parts[0] {
-                            "start" => TaskmasterDaemonRequest::Start(parts[1].to_owned()),
-                            "stop" => TaskmasterDaemonRequest::Stop(parts[1].to_owned()),
-                            "restart" => TaskmasterDaemonRequest::Restart(parts[1].to_owned()),
-                            "load" => TaskmasterDaemonRequest::Load(parts[1].to_owned()),
-                            "unload" => TaskmasterDaemonRequest::Unload(parts[1].to_owned()),
-                            "reload" => TaskmasterDaemonRequest::Reload(parts[1].to_owned()),
-                            _ => {
-                                println!("Invalid command");
-                                continue;
-                            }
+					"status" => TaskmasterDaemonRequest::Status,
+					"reload" => TaskmasterDaemonRequest::Reload,
+					"restart" => TaskmasterDaemonRequest::Restart,
+					_ => {
+						let parts: Vec<&str> = line.split_whitespace().collect();
+						if parts.len() < 2 {
+							println!("Invalid command");
+							continue;
+						}
+						match parts[0] {
+							"start" => TaskmasterDaemonRequest::StartProgram(parts[1].to_owned()),
+							"stop" => TaskmasterDaemonRequest::StopProgram(parts[1].to_owned()),
+							"restart" => TaskmasterDaemonRequest::RestartProgram(parts[1].to_owned()),
+							"load" => TaskmasterDaemonRequest::LoadFile(parts[1].to_owned()),
+							"unload" => TaskmasterDaemonRequest::UnloadFile(parts[1].to_owned()),
+							"reload" => TaskmasterDaemonRequest::ReloadFile(parts[1].to_owned()),
+							_ => {
+								println!("Invalid command");
+								continue;
+							}
 						}
 					}
 				};
 				
 				// TODO: CHANGE THE PATH!!!
 				let mut stream = UnixStream::connect("/path/to/socket").unwrap();
-                bincode::serialize_into(&mut stream, &request).unwrap();
-                stream.flush().unwrap();
+				bincode::serialize_into(&mut stream, &request).unwrap();
+				stream.flush().unwrap();
 
-                let response: TaskmasterResponse = bincode::deserialize_from(&mut stream).unwrap();
-                println!("Response: {:?}", response);
+				let response: TaskmasterDaemonResult = bincode::deserialize_from(&mut stream).unwrap();
+				println!("Response: {:?}", response);
 			},
 			Err(err) => {
 				println!("Error: {:?}", err);

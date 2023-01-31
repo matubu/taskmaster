@@ -1,3 +1,6 @@
+extern crate taskmastersocket;
+use taskmastersocket::{TaskmasterDaemonRequest, TaskmasterDaemonResult};
+
 use std::{collections::HashMap, process::Child, fs::File};
 
 use daemonize::Daemonize;
