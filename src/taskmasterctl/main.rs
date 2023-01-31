@@ -12,9 +12,9 @@ use rustyline::{
 	line_buffer::LineBuffer, Helper, config::Configurer
 };
 
-use std::borrow::Cow::{self, Owned};
+use std::{borrow::Cow::{self, Owned}, path::PathBuf, fs};
 
-use std::io::{Read, Write};
+use std::io::{Write};
 use std::os::unix::net::UnixStream;
 
 struct TaskmasterHelper {
@@ -79,7 +79,43 @@ impl Validator for TaskmasterHelper {
 
 impl Helper for TaskmasterHelper {}
 
+fn resolve_path(path: &str) -> Result<String, &str> {
+	let path = PathBuf::from(path);
+
+	Ok(fs::canonicalize(&path).map_err(|_| "Could not resolve path")?
+		.into_os_string().into_string().map_err(|_| "Could not resolve path")?
+		.to_owned())
+}
+
+fn parse_line(line: &str) -> Result<TaskmasterDaemonRequest, &str> {
+	Ok(match line {
+		"status" => TaskmasterDaemonRequest::Status,
+		"reload" => TaskmasterDaemonRequest::Reload,
+		"restart" => TaskmasterDaemonRequest::Restart,
+		_ => {
+			let parts: Vec<&str> = line.split_whitespace().collect();
+			if parts.len() < 2 {
+				return Err("Invalid command");
+			}
+			match parts[0] {
+				"start" => TaskmasterDaemonRequest::StartProgram(parts[1].to_owned()),
+				"stop" => TaskmasterDaemonRequest::StopProgram(parts[1].to_owned()),
+				"restart" => TaskmasterDaemonRequest::RestartProgram(parts[1].to_owned()),
+				"load" => TaskmasterDaemonRequest::LoadFile(resolve_path(parts[1])?),
+				"unload" => TaskmasterDaemonRequest::UnloadFile(resolve_path(parts[1])?),
+				"reload" => TaskmasterDaemonRequest::ReloadFile(resolve_path(parts[1])?),
+				_ => {
+					return Err("Invalid command");
+				}
+			}
+		}
+	})
+}
+
 fn main() {
+	let mut stream = UnixStream::connect("/tmp/taskmasterd.sock")
+		.expect("Could not connect to daemon");
+
 	let helper = TaskmasterHelper {
 		highlighter: TaskmasterHighlighter::new(),
 		completion:  FilenameCompleter::new()
@@ -97,38 +133,18 @@ fn main() {
 				rl.add_history_entry(line.as_str());
 				println!("Line: {}", line);
 
-				let request = match line.as_str() {
-					"status" => TaskmasterDaemonRequest::Status,
-					"reload" => TaskmasterDaemonRequest::Reload,
-					"restart" => TaskmasterDaemonRequest::Restart,
-					_ => {
-						let parts: Vec<&str> = line.split_whitespace().collect();
-						if parts.len() < 2 {
-							println!("Invalid command");
-							continue;
-						}
-						match parts[0] {
-							"start" => TaskmasterDaemonRequest::StartProgram(parts[1].to_owned()),
-							"stop" => TaskmasterDaemonRequest::StopProgram(parts[1].to_owned()),
-							"restart" => TaskmasterDaemonRequest::RestartProgram(parts[1].to_owned()),
-							"load" => TaskmasterDaemonRequest::LoadFile(parts[1].to_owned()),
-							"unload" => TaskmasterDaemonRequest::UnloadFile(parts[1].to_owned()),
-							"reload" => TaskmasterDaemonRequest::ReloadFile(parts[1].to_owned()),
-							_ => {
-								println!("Invalid command");
-								continue;
-							}
-						}
-					}
-				};
-				
-				// TODO: CHANGE THE PATH!!!
-				let mut stream = UnixStream::connect("/tmp/taskmasterd.sock").unwrap();
-				bincode::serialize_into(&mut stream, &request).unwrap();
-				stream.flush().unwrap();
+				match parse_line(line.as_str()) {
+					Ok(request) => {
+						bincode::serialize_into(&mut stream, &request).unwrap();
+						stream.flush().unwrap();
 
-				let response: TaskmasterDaemonResult = bincode::deserialize_from(&mut stream).unwrap();
-				println!("Response: {:?}", response);
+						let response: TaskmasterDaemonResult = bincode::deserialize_from(&mut stream).unwrap();
+						println!("Response: {:?}", response);
+					}
+					Err(err) => {
+						eprintln!("Error: {err}")
+					}
+				}
 			},
 			Err(err) => {
 				println!("Error: {:?}", err);

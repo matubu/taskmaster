@@ -22,6 +22,5 @@ yaml-rust = "0.4"
 rustyline = "10.1.1"
 syntect = "5.0.0"
 daemonize = "0.4.1"
-resolve-path = "0.1.0"
 serde = { version = "1.0.152", features = ["derive"] }
 bincode = "1.3.3"
