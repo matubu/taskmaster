@@ -1,5 +1,7 @@
-use std::{collections::HashMap, process::Child};
+use std::{collections::HashMap, process::Child, fs::File};
 
+use daemonize::Daemonize;
+use resolve_path::PathResolveExt;
 use yaml_rust::Yaml;
 
 macro_rules! get_required (
@@ -210,11 +212,32 @@ impl TaskFiles {
 }
 
 fn main() {
+    let stdout = File::create("/tmp/taskmasterd.out").unwrap();
+    let stderr = File::create("/tmp/taskmasterd.err").unwrap();
+
+    let config_path = "configs/config.yaml".try_resolve()
+        .expect("Could not resolve config file path.").into_owned();
+
+    println!("Config file: {:?}", config_path);
+
+    // TODO pid file ?
+    let daemonize = Daemonize::new()
+        .stdout(stdout)
+        .stderr(stderr);
+
+    println!("Daemonize...");
+
+    daemonize.start().expect("Failed to daemonize");
+
+    println!("Daemonized");
+
     let mut tasks = TaskFiles::new();
 
-    {
-        tasks.load("configs/config.yaml");
-    }
+    // TODO should be the client that load/unload the config file
+    tasks.load(config_path.to_str().unwrap());
+
+    println!("Loaded config file \"configs/config.yaml\"");
+    println!("Starting health check loop...");
 
     loop {
         tasks.health_check();
