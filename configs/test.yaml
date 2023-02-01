@@ -2,3 +2,5 @@ programs:
   nginx:
     cmd: "ls"
     retries: 5
+  cat:
+    cmd: "cat"

@@ -6,6 +6,8 @@ use std::{collections::HashMap, process::Child, fs::File, os::unix::{net::{UnixL
 use daemonize::Daemonize;
 use yaml_rust::Yaml;
 
+// TODO generate id to be able to kill/restart... tasks
+
 macro_rules! get_required (
 	($yaml:ident, $key:tt, $convert:ident) => (
 		$yaml.remove(&Yaml::String($key.to_owned()))
@@ -25,9 +27,27 @@ macro_rules! get_optional (
 );
 
 #[derive(PartialEq, Clone, Debug)]
+enum TaskOptionAutoRestart {
+	Always,
+	Never,
+	Unexpected(Vec<i32>)
+}
+
+#[derive(PartialEq, Clone, Debug)]
 struct TaskOptions {
 	argv: Vec<String>,
 	numprocs: i64,
+	autostart: bool,
+	// autorestart: TaskOptionAutoRestart,
+	// starttime_sec: u64,
+	retries: i64,
+	// stopsignal: ,
+	// stoptime_sec: ,
+	// stdout: Option<String>,
+	// stderr: Option<String>,
+	// env: HashMap<String, String>,
+	// workingdir: Option<String>,
+	// umask: Option<u32>,
 }
 
 enum ExitStatus {
@@ -42,7 +62,7 @@ enum ExitStatus {
 struct Process {
 	process: Option<Child>,
 	created_at: Instant,
-	retries_count: u64,
+	retries_count: i64,
 	current_status: ExitStatus
 }
 
@@ -93,10 +113,14 @@ impl Process {
 	fn health_check(&mut self, opts: &TaskOptions) {
 		if let Some(child) = &mut self.process {
 			if let Ok(Some(status)) = child.try_wait() {
-				self.retries_count += 1;
 				if let Some(code) = status.code() {
 					self.current_status = ExitStatus::Exited{at: Instant::now(), code};
 				}
+				self.process = None;
+				if self.retries_count >= opts.retries {
+					return;
+				}
+				self.retries_count += 1;
 				self.spawn(opts);
 			}
 		}
@@ -124,6 +148,12 @@ impl Task {
 		Task {
 			options: self.options.clone(),
 			processes: Vec::new(),
+		}
+	}
+
+	fn init(&mut self) {
+		if self.options.autostart {
+			self.start();
 		}
 	}
 
@@ -187,8 +217,10 @@ impl TaskFile {
 					let mut program = value.as_hash()
 						.ok_or("convert a program.")?.clone();
 
-					let cmd = get_required!(program, "cmd", as_str);
-					let numprocs = get_optional!(program, "numprocs", as_i64, 1);
+					let cmd = get_required!(program, "cmd", into_string);
+					let numprocs = get_optional!(program, "numprocs", into_i64, 1);
+					let autostart = get_optional!(program, "autostart", into_bool, true);
+					let retries = get_optional!(program, "retries", into_i64, 8);
 
 					for key in program.keys() {
 						eprintln!("\x1b[93m[Warning]\x1b[0m the {} value was ignored for \"{}\"", key.as_str().ok_or("Failed to convert to string")?, name);
@@ -199,8 +231,10 @@ impl TaskFile {
 
 					task_file.add_task(name, Task {
 						options: TaskOptions {
-							argv: argv,
-							numprocs: numprocs,
+							argv,
+							numprocs,
+							autostart,
+							retries
 						},
 						processes: Vec::new(),
 					});
@@ -216,6 +250,12 @@ impl TaskFile {
 			eprintln!("\x1b[93m[Warning]\x1b[0m duplicate program: \"{name}\"");
 		} else {
 			self.tasks.insert(name.to_owned(), task);
+		}
+	}
+
+	fn init(&mut self) {
+		for task in self.tasks.values_mut() {
+			task.init();
 		}
 	}
 
@@ -239,7 +279,9 @@ impl TaskFile {
 				old_task.update(task.options.clone());
 				new_tasks.insert(name.to_owned(), old_task);
 			} else {
-				new_tasks.insert(name.to_owned(), task.clone_options());
+				let mut new_task = task.clone_options();
+				new_task.init();
+				new_tasks.insert(name.to_owned(), new_task);
 			}
 		}
 
@@ -279,7 +321,7 @@ impl TaskFiles {
 			if let Some(task_file) = self.tasks_files.get_mut(path) {
 				task_file.update(new_task_file);
 			} else {
-				new_task_file.start();
+				new_task_file.init();
 				self.tasks_files.insert(new_task_file.path.clone(), new_task_file);
 			}
 		}
