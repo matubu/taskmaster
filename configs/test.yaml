@@ -1,0 +1,4 @@
+programs:
+  nginx:
+    cmd: "ls"
+    retries: 5
