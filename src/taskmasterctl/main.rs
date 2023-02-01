@@ -112,6 +112,7 @@ fn parse_line(line: &str) -> Result<TaskmasterDaemonRequest, &str> {
 				"start" => TaskmasterDaemonRequest::StartProgram(parts[1].to_owned()),
 				"stop" => TaskmasterDaemonRequest::StopProgram(parts[1].to_owned()),
 				"restart" => TaskmasterDaemonRequest::RestartProgram(parts[1].to_owned()),
+				"info" => TaskmasterDaemonRequest::InfoProgram(parts[1].to_owned()),
 				"load" => TaskmasterDaemonRequest::LoadFile(resolve_path(parts[1])?),
 				"unload" => TaskmasterDaemonRequest::UnloadFile(resolve_path(parts[1])?),
 				_ => {
@@ -164,19 +165,18 @@ fn main() {
 								rl.helper_mut().unwrap().status = Status::Success;
 							},
 							TaskmasterDaemonResult::Err(err) => {
-								eprintln!("Error: {err}");
+								eprintln!("\x1b[91mError\x1b[0m: {err}");
 								rl.helper_mut().unwrap().status = Status::Error;
 							}
 						}
 					}
 					Err(err) => {
 						rl.helper_mut().unwrap().status = Status::Error;
-						eprintln!("Error: {err}")
+						eprintln!("\x1b[91mError\x1b[0m: {err}")
 					}
 				}
 			},
-			Err(err) => {
-				println!("Error: {:?}", err);
+			Err(_) => {
 				break
 			}
 		}

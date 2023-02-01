@@ -55,7 +55,7 @@ scope: taskmasterctl
 
 contexts:
   main:
-  - match: \b(help|status|start|stop|restart|load|unload|reload|logs)\b
+  - match: \b(help|status|start|stop|restart|info|load|unload|reload|logs)\b
     scope: function
   - match: \bglobal\b
     scope: keyword

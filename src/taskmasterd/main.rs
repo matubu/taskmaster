@@ -10,19 +10,15 @@ use yaml_rust::Yaml;
 
 macro_rules! get_required (
 	($yaml:ident, $key:tt, $convert:ident) => (
-		$yaml.remove(&Yaml::String($key.to_owned()))
-			.ok_or(concat!("convert a ", $key))?.$convert()
-			.ok_or(concat!($key, "convert as ", stringify!($convert)))?.to_owned()
+		$yaml[$key].$convert()
+			.ok_or(concat!($key, " is required and need to be ", stringify!($convert)))?.to_owned()
 	)
 );
 
 macro_rules! get_optional (
 	($yaml:ident, $key:tt, $convert:ident, $default:expr) => (
-		if let Some(value) = $yaml.remove(&Yaml::String($key.to_owned())) {
-			value.$convert().ok_or(concat!($key, "convert as ", stringify!($convert)))?.to_owned()
-		} else {
-			$default
-		}
+		$yaml[$key].$convert()
+			.unwrap_or($default)
 	)
 );
 
@@ -81,12 +77,10 @@ impl Process {
 			.args(&opts.argv[1..])
 			.spawn() {
 			Ok(child) => {
-				println!("\"{name}\" started", name = opts.argv[0]);
 				self.current_status = ExitStatus::Running{since: Instant::now(), pid: child.id()};
 				self.process = Some(child);
 			},
 			Err(e) => {
-				eprintln!("\"{name}\" failed to start: {e}", name = opts.argv[0]);
 				self.current_status = ExitStatus::LaunchFailed{at: Instant::now(), err: e.to_string()};
 			}
 		}
@@ -214,17 +208,11 @@ impl TaskFile {
 				for (key, value) in programs {
 					let name = key.as_str()
 						.ok_or("Expect a program name.")?;
-					let mut program = value.as_hash()
-						.ok_or("convert a program.")?.clone();
 
-					let cmd = get_required!(program, "cmd", into_string);
-					let numprocs = get_optional!(program, "numprocs", into_i64, 1);
-					let autostart = get_optional!(program, "autostart", into_bool, true);
-					let retries = get_optional!(program, "retries", into_i64, 8);
-
-					for key in program.keys() {
-						eprintln!("\x1b[93m[Warning]\x1b[0m the {} value was ignored for \"{}\"", key.as_str().ok_or("Failed to convert to string")?, name);
-					}
+					let cmd = get_required!(value, "cmd", as_str);
+					let numprocs = get_optional!(value, "numprocs", as_i64, 1);
+					let autostart = get_optional!(value, "autostart", as_bool, true);
+					let retries = get_optional!(value, "retries", as_i64, 8);
 
 					let argv = cmd.split_whitespace().collect::<Vec<&str>>()
 							.iter().map(|s| (*s).to_owned()).collect();
@@ -247,7 +235,7 @@ impl TaskFile {
 
 	fn add_task(&mut self, name: &str, task: Task) {
 		if self.tasks.contains_key(name) {
-			eprintln!("\x1b[93m[Warning]\x1b[0m duplicate program: \"{name}\"");
+			eprintln!("Duplicate program name: \"{name}\"");
 		} else {
 			self.tasks.insert(name.to_owned(), task);
 		}
@@ -292,10 +280,10 @@ impl TaskFile {
 		self.tasks = new_tasks;
 	}
 
-	fn reload(&mut self) {
-		if let Ok(task_file) = TaskFile::from_yaml(&self.path) {
-			self.update(task_file);
-		}
+	fn reload(&mut self) -> Result<(), String> {
+		let task_file = TaskFile::from_yaml(&self.path)?;
+		self.update(task_file);
+		Ok(())
 	}
 
 	fn health_check(&mut self) {
@@ -316,13 +304,19 @@ impl TaskFiles {
 		}
 	}
 
-	fn load(&mut self, path: &str) {
-		if let Ok(mut new_task_file) = TaskFile::from_yaml(path) {
-			if let Some(task_file) = self.tasks_files.get_mut(path) {
-				task_file.update(new_task_file);
-			} else {
-				new_task_file.init();
-				self.tasks_files.insert(new_task_file.path.clone(), new_task_file);
+	fn load(&mut self, path: &str) -> Result<(), String> {
+		match TaskFile::from_yaml(path) {
+			Ok(mut new_task_file) => {
+				if let Some(task_file) = self.tasks_files.get_mut(path) {
+					task_file.update(new_task_file);
+				} else {
+					new_task_file.init();
+					self.tasks_files.insert(new_task_file.path.clone(), new_task_file);
+				}
+				Ok(())
+			}
+			Err(err) => {
+				Err(format!("Failed to load {}: {}", path, err))
 			}
 		}
 	}
@@ -338,6 +332,25 @@ impl TaskFiles {
 			task_file.health_check();
 		}
 	}
+
+	fn status(&self) -> String {
+		let mut status = String::new();
+
+		for task_file in self.tasks_files.values() {
+			if !status.is_empty() {
+				status.push_str("\n");
+			}
+			status.push_str(&format!("{}:\n", task_file.path));
+			for (name, task) in task_file.tasks.iter() {
+				status.push_str(&format!("\n  {}:\n", name));
+				for i in 0..task.processes.len() {
+					status.push_str(&format!("    [{i}] -> {}\n", task.processes[i].status()));
+				}
+			}
+		}
+
+		status
+	}
 }
 
 fn bind(path: &str) -> std::io::Result<UnixListener> {
@@ -349,7 +362,6 @@ fn bind(path: &str) -> std::io::Result<UnixListener> {
 	UnixListener::bind(path)
 }
 
-// TODO error handling load...
 fn handle_client_request(tasks: &mut MutexGuard<TaskFiles>, req: TaskmasterDaemonRequest) -> TaskmasterDaemonResult {
 	match req {
 		TaskmasterDaemonRequest::Status => {
@@ -357,26 +369,21 @@ fn handle_client_request(tasks: &mut MutexGuard<TaskFiles>, req: TaskmasterDaemo
 				return TaskmasterDaemonResult::Ok("No tasks loaded yet".to_owned());
 			}
 
-			let mut status = String::new();
-			for task_file in tasks.tasks_files.values() {
-				if !status.is_empty() {
-					status.push_str("\n");
-				}
-				status.push_str(&format!("{}:\n", task_file.path));
-				for (name, task) in task_file.tasks.iter() {
-					status.push_str(&format!("\n  {}:\n", name));
-					for i in 0..task.processes.len() {
-						status.push_str(&format!("    [{i}] -> {}\n", task.processes[i].status()));
-					}
-				}
-			}
-			TaskmasterDaemonResult::Raw(status)
+			TaskmasterDaemonResult::Raw(tasks.status())
 		},
 		TaskmasterDaemonRequest::Reload => {
+			let mut errors = String::new();
+
 			for task_file in tasks.tasks_files.values_mut() {
-				task_file.reload();
+				if let Err(err) = task_file.reload() {
+					errors.push_str(format!("\n  - Failed to reload {}: {}", task_file.path, err).as_str());
+				}
 			}
-			TaskmasterDaemonResult::Ok("ok".to_owned())
+			if errors.len() > 0 {
+				TaskmasterDaemonResult::Err(errors)
+			} else {
+				TaskmasterDaemonResult::Ok("ok".to_owned())
+			}
 		},
 		TaskmasterDaemonRequest::Restart => {
 			for task_file in tasks.tasks_files.values_mut() {
@@ -386,8 +393,10 @@ fn handle_client_request(tasks: &mut MutexGuard<TaskFiles>, req: TaskmasterDaemo
 			TaskmasterDaemonResult::Ok("ok".to_owned())
 		},
 		TaskmasterDaemonRequest::LoadFile(path) => {
-			tasks.load(&path);
-			TaskmasterDaemonResult::Ok("ok".to_owned())
+			match tasks.load(&path) {
+				Ok(_) => TaskmasterDaemonResult::Ok("ok".to_owned()),
+				Err(err) => return TaskmasterDaemonResult::Err(err)
+			}
 		},
 		TaskmasterDaemonRequest::UnloadFile(path) => {
 			tasks.unload(&path);
@@ -400,7 +409,6 @@ fn handle_client_request(tasks: &mut MutexGuard<TaskFiles>, req: TaskmasterDaemo
 fn main() {
 	let listener = bind("/tmp/taskmasterd.sock").expect("Could not create unix socket");
 
-	// TODO pid file ?
 	// let stdout = File::create("/tmp/taskmasterd.out").unwrap();
 	// let stderr = File::create("/tmp/taskmasterd.err").unwrap();
 	// let daemonize = Daemonize::new()

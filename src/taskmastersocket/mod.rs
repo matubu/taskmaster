@@ -9,6 +9,7 @@ pub enum TaskmasterDaemonRequest {
 	StartProgram(String),
 	StopProgram(String),
 	RestartProgram(String),
+	InfoProgram(String),    // get the config of a program...
 
 	LoadFile(String),
 	UnloadFile(String),
