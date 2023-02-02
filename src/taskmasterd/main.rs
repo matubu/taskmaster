@@ -133,15 +133,19 @@ impl Process {
 }
 
 struct Task {
+	id: usize,
 	options: TaskOptions,
 	processes: Vec<Process>,
 }
 
 impl Task {
-	fn clone_options(&self) -> Task {
+	fn new(options: TaskOptions) -> Task {
+		static mut id: usize = 0;
+
 		Task {
-			options: self.options.clone(),
-			processes: Vec::new(),
+			id: unsafe { id += 1; id },
+			options,
+			processes: Vec::new()
 		}
 	}
 
@@ -182,6 +186,16 @@ impl Task {
 			process.health_check(&self.options);
 		}
 	}
+
+	fn status(&self, ident: &str) -> String {
+		let mut status = String::new();
+
+		for i in 0..self.processes.len() {
+			status.push_str(&format!("{ident}[{i}] -> {}\n", self.processes[i].status()));
+		}
+
+		status
+	}
 }
 
 struct TaskFile {
@@ -217,28 +231,18 @@ impl TaskFile {
 					let argv = cmd.split_whitespace().collect::<Vec<&str>>()
 							.iter().map(|s| (*s).to_owned()).collect();
 
-					task_file.add_task(name, Task {
-						options: TaskOptions {
-							argv,
-							numprocs,
-							autostart,
-							retries
-						},
-						processes: Vec::new(),
-					});
+					task_file.tasks.insert(name.to_owned(),
+					Task::new(TaskOptions {
+						argv,
+						numprocs,
+						autostart,
+						retries
+					}));
 				}
 			}
 		}
 
 		Ok(task_file)
-	}
-
-	fn add_task(&mut self, name: &str, task: Task) {
-		if self.tasks.contains_key(name) {
-			eprintln!("Duplicate program name: \"{name}\"");
-		} else {
-			self.tasks.insert(name.to_owned(), task);
-		}
 	}
 
 	fn init(&mut self) {
@@ -267,7 +271,7 @@ impl TaskFile {
 				old_task.update(task.options.clone());
 				new_tasks.insert(name.to_owned(), old_task);
 			} else {
-				let mut new_task = task.clone_options();
+				let mut new_task = Task::new(task.options.clone());
 				new_task.init();
 				new_tasks.insert(name.to_owned(), new_task);
 			}
@@ -342,14 +346,27 @@ impl TaskFiles {
 			}
 			status.push_str(&format!("{}:\n", task_file.path));
 			for (name, task) in task_file.tasks.iter() {
-				status.push_str(&format!("\n  {}:\n", name));
-				for i in 0..task.processes.len() {
-					status.push_str(&format!("    [{i}] -> {}\n", task.processes[i].status()));
-				}
+				status.push_str(&format!(
+					"\n  {name} (id {}):\n{}",
+					task.id,
+					task.status("    ")
+				));
 			}
 		}
 
 		status
+	}
+
+	fn find_by_id(&mut self, id: usize) -> Option<&mut Task> {
+		for (_, task_file) in &mut self.tasks_files {
+			for (_, task) in &mut task_file.tasks {
+				if task.id == id {
+					return Some(task);
+				}
+			}
+		}
+
+		None
 	}
 }
 
@@ -382,7 +399,7 @@ fn handle_client_request(tasks: &mut MutexGuard<TaskFiles>, req: TaskmasterDaemo
 			if errors.len() > 0 {
 				TaskmasterDaemonResult::Err(errors)
 			} else {
-				TaskmasterDaemonResult::Ok("ok".to_owned())
+				TaskmasterDaemonResult::Success
 			}
 		},
 		TaskmasterDaemonRequest::Restart => {
@@ -390,17 +407,51 @@ fn handle_client_request(tasks: &mut MutexGuard<TaskFiles>, req: TaskmasterDaemo
 				task_file.stop();
 				task_file.start();
 			}
-			TaskmasterDaemonResult::Ok("ok".to_owned())
+			TaskmasterDaemonResult::Success
 		},
+		TaskmasterDaemonRequest::StartTask(id) => {
+			if let Some(task) = tasks.find_by_id(id) {
+				task.start();
+				return TaskmasterDaemonResult::Success
+			}
+			TaskmasterDaemonResult::Err("Task not found".to_owned())
+		}
+		TaskmasterDaemonRequest::StopTask(id) => {
+			if let Some(task) = tasks.find_by_id(id) {
+				task.stop();
+				return TaskmasterDaemonResult::Success
+			}
+			TaskmasterDaemonResult::Err("Task not found".to_owned())
+		}
+		TaskmasterDaemonRequest::RestartTask(id) => {
+			if let Some(task) = tasks.find_by_id(id) {
+				task.stop();
+				task.start();
+				return TaskmasterDaemonResult::Success
+			}
+			TaskmasterDaemonResult::Err("Task not found".to_owned())
+		}
+		TaskmasterDaemonRequest::InfoTask(id) => {
+			if let Some(task) = tasks.find_by_id(id) {
+				return TaskmasterDaemonResult::Raw(
+					format!(
+						"{:?}\n{}",
+						task.options,
+						task.status("  ")
+					)
+				)
+			}
+			TaskmasterDaemonResult::Err("Task not found".to_owned())
+		}
 		TaskmasterDaemonRequest::LoadFile(path) => {
 			match tasks.load(&path) {
-				Ok(_) => TaskmasterDaemonResult::Ok("ok".to_owned()),
+				Ok(_) => TaskmasterDaemonResult::Success,
 				Err(err) => return TaskmasterDaemonResult::Err(err)
 			}
 		},
 		TaskmasterDaemonRequest::UnloadFile(path) => {
 			tasks.unload(&path);
-			TaskmasterDaemonResult::Ok("ok".to_owned())
+			TaskmasterDaemonResult::Success
 		},
 		_ => TaskmasterDaemonResult::Err("Not implemented".to_owned())
 	}

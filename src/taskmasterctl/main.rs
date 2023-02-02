@@ -98,6 +98,23 @@ fn resolve_path(path: &str) -> Result<String, &str> {
 		.to_owned())
 }
 
+fn usage() {
+	println!("Usage:");
+	print!("{}", TaskmasterHighlighter::new().highlight(r#"
+  status
+  reload
+  restart
+
+  start <task-id>
+  stop <task-id>
+  restart <task-id>
+  info <task-id>
+
+  load <file>
+  unload <file>
+"#));
+}
+
 fn parse_line(line: &str) -> Result<TaskmasterDaemonRequest, &str> {
 	Ok(match line {
 		"status" => TaskmasterDaemonRequest::Status,
@@ -106,16 +123,19 @@ fn parse_line(line: &str) -> Result<TaskmasterDaemonRequest, &str> {
 		_ => {
 			let parts: Vec<&str> = line.split_whitespace().collect();
 			if parts.len() < 2 {
+				usage();
 				return Err("Invalid command");
 			}
+			
 			match parts[0] {
-				"start" => TaskmasterDaemonRequest::StartProgram(parts[1].to_owned()),
-				"stop" => TaskmasterDaemonRequest::StopProgram(parts[1].to_owned()),
-				"restart" => TaskmasterDaemonRequest::RestartProgram(parts[1].to_owned()),
-				"info" => TaskmasterDaemonRequest::InfoProgram(parts[1].to_owned()),
+				"start" => TaskmasterDaemonRequest::StartTask(usize::from_str_radix(parts[1], 10).map_err(|_| "Argument should be an int")?),
+				"stop" => TaskmasterDaemonRequest::StopTask(usize::from_str_radix(parts[1], 10).map_err(|_| "Argument should be an int")?),
+				"restart" => TaskmasterDaemonRequest::RestartTask(usize::from_str_radix(parts[1], 10).map_err(|_| "Argument should be an int")?),
+				"info" => TaskmasterDaemonRequest::InfoTask(usize::from_str_radix(parts[1], 10).map_err(|_| "Argument should be an int")?),
 				"load" => TaskmasterDaemonRequest::LoadFile(resolve_path(parts[1])?),
 				"unload" => TaskmasterDaemonRequest::UnloadFile(resolve_path(parts[1])?),
 				_ => {
+					usage();
 					return Err("Invalid command");
 				}
 			}
@@ -156,6 +176,10 @@ fn main() {
 						stream.flush().unwrap();
 
 						match bincode::deserialize_from::<&UnixStream, TaskmasterDaemonResult>(&mut stream).unwrap() {
+							TaskmasterDaemonResult::Success => {
+								println!("\x1b[92mSuccess\x1b[0m");
+								rl.helper_mut().unwrap().status = Status::Success;
+							}
 							TaskmasterDaemonResult::Ok(s) => {
 								println!("{s}");
 								rl.helper_mut().unwrap().status = Status::Success;

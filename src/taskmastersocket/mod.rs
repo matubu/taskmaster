@@ -6,10 +6,10 @@ pub enum TaskmasterDaemonRequest {
 	Reload,  // reload all the configs and restart the processes
 	Restart, // restart all the processes
 
-	StartProgram(String),
-	StopProgram(String),
-	RestartProgram(String),
-	InfoProgram(String),    // get the config of a program...
+	StartTask(usize),
+	StopTask(usize),
+	RestartTask(usize),
+	InfoTask(usize),    // get the config of a program...
 
 	LoadFile(String),
 	UnloadFile(String),
@@ -19,6 +19,7 @@ pub enum TaskmasterDaemonRequest {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum TaskmasterDaemonResult {
+	Success,
 	Ok(String),
 	Raw(String),
 	Err(String),

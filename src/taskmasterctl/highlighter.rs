@@ -63,7 +63,7 @@ contexts:
     push: string
   - match: \s[+-]?([0-9_]+)\b
     scope: number
-  - match: \s(--[a-zA-Z-]*)\b
+  - match: \s(-[a-zA-Z-]+)\b
     scope: flag
 
   string:
