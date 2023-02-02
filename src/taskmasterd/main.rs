@@ -1,12 +1,9 @@
 extern crate taskmastersocket;
 use taskmastersocket::{TaskmasterDaemonRequest, TaskmasterDaemonResult};
 
-use std::{collections::HashMap, process::Child, fs::File, os::unix::{net::{UnixListener, UnixStream}, process}, thread, io::Write, sync::{Mutex, Arc, MutexGuard}, time::{Duration, Instant}, fmt::format};
+use std::{collections::HashMap, process::Child, fs::File, os::unix::{net::{UnixListener, UnixStream}}, thread, io::Write, sync::{Mutex, Arc, MutexGuard}, time::{Duration, Instant}};
 
 use daemonize::Daemonize;
-use yaml_rust::Yaml;
-
-// TODO generate id to be able to kill/restart... tasks
 
 macro_rules! get_required (
 	($yaml:ident, $key:tt, $convert:ident) => (
@@ -39,11 +36,11 @@ struct TaskOptions {
 	retries: i64,
 	// stopsignal: ,
 	// stoptime_sec: ,
-	// stdout: Option<String>,
-	// stderr: Option<String>,
-	// env: HashMap<String, String>,
-	// workingdir: Option<String>,
-	// umask: Option<u32>,
+	stdout: Option<String>,
+	stderr: Option<String>,
+	env: HashMap<String, String>,
+	workingdir: Option<String>,
+	umask: u16,
 }
 
 enum ExitStatus {
@@ -73,16 +70,38 @@ impl Process {
 	}
 
 	fn spawn(&mut self, opts: &TaskOptions) {
-		match std::process::Command::new(&opts.argv[0])
-			.args(&opts.argv[1..])
-			.spawn() {
-			Ok(child) => {
-				self.current_status = ExitStatus::Running{since: Instant::now(), pid: child.id()};
-				self.process = Some(child);
-			},
-			Err(e) => {
-				self.current_status = ExitStatus::LaunchFailed{at: Instant::now(), err: e.to_string()};
+		let mut _spawn = || -> Result<(), String> {
+			let mut process = std::process::Command::new(&opts.argv[0]);
+
+			process.args(&opts.argv[1..]);
+
+			if let Some(stdout) = &opts.stdout {
+				process.stdout(File::create(stdout).map_err(|_| "Could not create stdout file")?);
 			}
+			if let Some(stderr) = &opts.stderr {
+				process.stderr(File::create(stderr).map_err(|_| "Could not create stderr file")?);
+			}
+			process.envs(&opts.env);
+			if let Some(workingdir) = &opts.workingdir {
+				process.current_dir(workingdir);
+			}
+			unsafe { libc::umask(opts.umask) };
+
+			match process.spawn() {
+				Ok(child) => {
+					self.current_status = ExitStatus::Running{since: Instant::now(), pid: child.id()};
+					self.process = Some(child);
+				},
+				Err(e) => {
+					return Err(e.to_string());
+				}
+			}
+
+			Ok(())
+		};
+
+		if let Err(err) = _spawn() {
+			self.current_status = ExitStatus::LaunchFailed{at: Instant::now(), err};
 		}
 	}
 
@@ -212,31 +231,40 @@ impl TaskFile {
 		};
 
 		let config_file = std::fs::read_to_string(path)
-			.map_err(|_| "Could not open file.")?;
+			.map_err(|_| "Could not open file")?;
 
 		let config = yaml_rust::YamlLoader::load_from_str(config_file.as_str())
-			.map_err(|_| "Could not parse config file.")?;
+			.map_err(|_| "Could not parse config file")?;
 
 		for doc in config {
 			if let Some(programs) = doc["programs"].as_hash() {
 				for (key, value) in programs {
 					let name = key.as_str()
-						.ok_or("Expect a program name.")?;
+						.ok_or("Expect a program name")?;
 
 					let cmd = get_required!(value, "cmd", as_str);
-					let numprocs = get_optional!(value, "numprocs", as_i64, 1);
-					let autostart = get_optional!(value, "autostart", as_bool, true);
-					let retries = get_optional!(value, "retries", as_i64, 8);
-
 					let argv = cmd.split_whitespace().collect::<Vec<&str>>()
-							.iter().map(|s| (*s).to_owned()).collect();
+						.iter().map(|s| (*s).to_owned()).collect();
+
+					let env: HashMap<String, String> = value["env"].as_hash()
+						.map(|h| h.iter().filter_map(|(k, v)| {
+							if let (Some(a), Some(b)) = (k.as_str(), v.as_str()) {
+								return Some((a.to_owned(), b.to_owned()))
+							}
+							None
+						}).collect()).unwrap_or(HashMap::new());
 
 					task_file.tasks.insert(name.to_owned(),
 					Task::new(TaskOptions {
 						argv,
-						numprocs,
-						autostart,
-						retries
+						numprocs: get_optional!(value, "numprocs", as_i64, 1),
+						autostart: get_optional!(value, "autostart", as_bool, true),
+						retries: get_optional!(value, "retries", as_i64, 8),
+						stdout: value["stdout"].as_str().map(|s| s.to_owned()),
+						stderr: value["stderr"].as_str().map(|s| s.to_owned()),
+						env,
+						workingdir: value["workingdir"].as_str().map(|s| s.to_owned()),
+						umask: get_optional!(value, "umask", as_i64, 0o777) as u16,
 					}));
 				}
 			}
