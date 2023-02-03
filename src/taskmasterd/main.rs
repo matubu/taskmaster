@@ -1,4 +1,5 @@
 extern crate taskmastersocket;
+use lazy_static::lazy_static;
 use taskmastersocket::{TaskmasterDaemonRequest, TaskmasterDaemonResult};
 
 use std::{collections::{HashMap, HashSet}, process::Child, fs::File, os::unix::{net::{UnixListener, UnixStream}}, thread, io::Write, sync::{Mutex, Arc, MutexGuard}, time::{Duration, Instant}};
@@ -476,6 +477,21 @@ impl TaskFiles {
 		status
 	}
 
+	fn reload(&mut self) -> TaskmasterDaemonResult {
+		let mut errors = String::new();
+
+		for task_file in self.tasks_files.values_mut() {
+			if let Err(err) = task_file.reload() {
+				errors.push_str(format!("\n  - Failed to reload {}: {}", task_file.path, err).as_str());
+			}
+		}
+		if errors.len() > 0 {
+			TaskmasterDaemonResult::Err(errors)
+		} else {
+			TaskmasterDaemonResult::Success
+		}
+	}
+
 	fn find_by_id(&mut self, id: usize) -> Option<&mut Task> {
 		for (_, task_file) in &mut self.tasks_files {
 			for (_, task) in &mut task_file.tasks {
@@ -498,6 +514,10 @@ fn bind(path: &str) -> std::io::Result<UnixListener> {
 	UnixListener::bind(path)
 }
 
+lazy_static! {
+	static ref TASKS: Arc<Mutex<TaskFiles>> = Arc::new(Mutex::new(TaskFiles::new()));
+}
+
 fn handle_client_request(tasks: &mut MutexGuard<TaskFiles>, req: TaskmasterDaemonRequest) -> TaskmasterDaemonResult {
 	match req {
 		TaskmasterDaemonRequest::Status => {
@@ -508,18 +528,7 @@ fn handle_client_request(tasks: &mut MutexGuard<TaskFiles>, req: TaskmasterDaemo
 			TaskmasterDaemonResult::Raw(tasks.status())
 		},
 		TaskmasterDaemonRequest::Reload => {
-			let mut errors = String::new();
-
-			for task_file in tasks.tasks_files.values_mut() {
-				if let Err(err) = task_file.reload() {
-					errors.push_str(format!("\n  - Failed to reload {}: {}", task_file.path, err).as_str());
-				}
-			}
-			if errors.len() > 0 {
-				TaskmasterDaemonResult::Err(errors)
-			} else {
-				TaskmasterDaemonResult::Success
-			}
+			tasks.reload()
 		},
 		TaskmasterDaemonRequest::Restart => {
 			for task_file in tasks.tasks_files.values_mut() {
@@ -576,25 +585,38 @@ fn handle_client_request(tasks: &mut MutexGuard<TaskFiles>, req: TaskmasterDaemo
 	}
 }
 
+fn handler() {
+	if let TaskmasterDaemonResult::Err(err) = TASKS.clone().lock().unwrap().reload() {
+		println!("Error: {}", err);
+	}
+}
+
 fn main() {
+	if unsafe { libc::getuid() } != 0 {
+		println!("taskmasterd must be run as root");
+		return;
+	}
+
+	// Allow the taskmasterctl to connect to the socket
+	unsafe { libc::umask(0o755) };
+
 	let listener = bind("/tmp/taskmasterd.sock").expect("Could not create unix socket");
 
-	// let stdout = File::create("/tmp/taskmasterd.out").unwrap();
-	// let stderr = File::create("/tmp/taskmasterd.err").unwrap();
-	// let daemonize = Daemonize::new()
-	// 	.user("nobody")
-	// 	.group("nogroup")
-	// 	.stdout(stdout)
-	// 	.stderr(stderr);
+	let stdout = File::create("/tmp/taskmasterd.out").unwrap();
+	let stderr = File::create("/tmp/taskmasterd.err").unwrap();
+	let daemonize = Daemonize::new()
+		.user(std::env::var("SUDO_USER").unwrap().as_str())
+		.group("nobody")
+		.stdout(stdout)
+		.stderr(stderr);
 
-	// daemonize.start().expect("Failed to daemonize");
+	daemonize.start().expect("Failed to daemonize");
 
 	println!("Starting taskmasterd...");
 
-	let tasks = Arc::new(Mutex::new(TaskFiles::new()));
-
+	// Health loop
 	{
-		let tasks = tasks.clone();
+		let tasks = TASKS.clone();
 		thread::spawn(move || {
 			println!("Starting health check loop...");
 
@@ -605,11 +627,16 @@ fn main() {
 		});
 	}
 
+	// Signal handling 
+	unsafe {
+		libc::signal(libc::SIGHUP, handler as usize);
+	}
+
 	println!("Starting listener loop...");
 	for stream in listener.incoming() {
 		match stream {
 			Ok(mut stream) => {
-				let tasks = tasks.clone();
+				let tasks = TASKS.clone();
 				thread::spawn(move || {
 					loop {
 						if let Ok(request) = bincode::deserialize_from::<&UnixStream, TaskmasterDaemonRequest>(&stream) {

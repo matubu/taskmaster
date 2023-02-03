@@ -144,6 +144,11 @@ fn parse_line(line: &str) -> Result<TaskmasterDaemonRequest, &str> {
 }
 
 fn main() {
+	// if unsafe { libc::getuid() } != 0 {
+	// 	println!("taskmasterctl must be run as root");
+	// 	return;
+	// }
+
 	let mut stream = UnixStream::connect("/tmp/taskmasterd.sock")
 		.expect("Could not connect to daemon");
 
