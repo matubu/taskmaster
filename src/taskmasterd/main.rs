@@ -1,7 +1,7 @@
 extern crate taskmastersocket;
 use taskmastersocket::{TaskmasterDaemonRequest, TaskmasterDaemonResult};
 
-use std::{collections::HashMap, process::Child, fs::File, os::unix::{net::{UnixListener, UnixStream}}, thread, io::Write, sync::{Mutex, Arc, MutexGuard}, time::{Duration, Instant}};
+use std::{collections::{HashMap, HashSet}, process::Child, fs::File, os::unix::{net::{UnixListener, UnixStream}}, thread, io::Write, sync::{Mutex, Arc, MutexGuard}, time::{Duration, Instant}};
 
 use daemonize::Daemonize;
 
@@ -23,7 +23,7 @@ macro_rules! get_optional (
 enum TaskOptionAutoRestart {
 	Always,
 	Never,
-	Unexpected(Vec<i32>)
+	Unexpected(HashSet<i32>)
 }
 
 #[derive(PartialEq, Clone, Debug)]
@@ -31,7 +31,7 @@ struct TaskOptions {
 	argv: Vec<String>,
 	numprocs: i64,
 	autostart: bool,
-	// autorestart: TaskOptionAutoRestart,
+	autorestart: TaskOptionAutoRestart,
 	// starttime_sec: u64,
 	retries: i64,
 	// stopsignal: ,
@@ -126,11 +126,16 @@ impl Process {
 	fn health_check(&mut self, opts: &TaskOptions) {
 		if let Some(child) = &mut self.process {
 			if let Ok(Some(status)) = child.try_wait() {
+				let mut restart = opts.autorestart == TaskOptionAutoRestart::Always;
 				if let Some(code) = status.code() {
 					self.current_status = ExitStatus::Exited{at: Instant::now(), code};
+					if let TaskOptionAutoRestart::Unexpected(codes) = &opts.autorestart {
+						restart = !codes.contains(&code);
+					}
 				}
 				self.process = None;
-				if self.retries_count >= opts.retries {
+
+				if !restart || self.retries_count >= opts.retries {
 					return;
 				}
 				self.retries_count += 1;
@@ -245,6 +250,20 @@ impl TaskFile {
 					let cmd = get_required!(value, "cmd", as_str);
 					let argv = cmd.split_whitespace().collect::<Vec<&str>>()
 						.iter().map(|s| (*s).to_owned()).collect();
+					
+					let exitcodes: HashSet<i32> = get_optional!(value, "exitcodes", as_vec, &Vec::new())
+						.iter().filter_map(|v| {
+							if let Some(n) = v.as_i64() {
+								return Some(n as i32)
+							}
+							None
+						}).collect::<HashSet<i32>>();
+					let autorestart = match get_optional!(value, "autorestart", as_str, "always"){
+						"always" => TaskOptionAutoRestart::Always,
+						"unexpected" => TaskOptionAutoRestart::Unexpected(exitcodes),
+						"never" => TaskOptionAutoRestart::Never,
+						_ => return Err("Invalid autorestart value")
+					};
 
 					let env: HashMap<String, String> = value["env"].as_hash()
 						.map(|h| h.iter().filter_map(|(k, v)| {
@@ -259,6 +278,7 @@ impl TaskFile {
 						argv,
 						numprocs: get_optional!(value, "numprocs", as_i64, 1),
 						autostart: get_optional!(value, "autostart", as_bool, true),
+						autorestart,
 						retries: get_optional!(value, "retries", as_i64, 8),
 						stdout: value["stdout"].as_str().map(|s| s.to_owned()),
 						stderr: value["stderr"].as_str().map(|s| s.to_owned()),
@@ -491,8 +511,10 @@ fn main() {
 	// let stdout = File::create("/tmp/taskmasterd.out").unwrap();
 	// let stderr = File::create("/tmp/taskmasterd.err").unwrap();
 	// let daemonize = Daemonize::new()
-	//     .stdout(stdout)
-	//     .stderr(stderr);
+	// 	.user("nobody")
+	// 	.group("nogroup")
+	// 	.stdout(stdout)
+	// 	.stderr(stderr);
 
 	// daemonize.start().expect("Failed to daemonize");
 

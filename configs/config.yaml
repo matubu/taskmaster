@@ -1,6 +1,6 @@
 programs:
-  nginx:
-    cmd: "echo hello"
+  exit_unexpected:
+    cmd: "false hello"
     numprocs: 1
     autostart: true
     autorestart: unexpected
@@ -18,6 +18,20 @@ programs:
       ANSWER: 42
     workingdir: /tmp
     umask: 022
+  
+  exit_expected:
+    cmd: "true"
+    autorestart: unexpected
+    exitcodes:
+      - 0
+  
+  restart_never:
+    cmd: "false"
+    autorestart: "never"
+  
+  restart_always:
+    cmd: "true"
+    autorestart: "always"
 
   vogsphere:
     cmd: "/usr/local/bin/vogsphere-worker --no-prefork"
