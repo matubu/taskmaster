@@ -104,6 +104,7 @@ fn usage() {
   status
   reload
   restart
+  stop
 
   start <task-id>
   stop <task-id>
@@ -120,6 +121,7 @@ fn parse_line(line: &str) -> Result<TaskmasterDaemonRequest, &str> {
 		"status" => TaskmasterDaemonRequest::Status,
 		"reload" => TaskmasterDaemonRequest::Reload,
 		"restart" => TaskmasterDaemonRequest::Restart,
+		"stop" => TaskmasterDaemonRequest::Stop,
 		_ => {
 			let parts: Vec<&str> = line.split_whitespace().collect();
 			if parts.len() < 2 {
@@ -144,11 +146,6 @@ fn parse_line(line: &str) -> Result<TaskmasterDaemonRequest, &str> {
 }
 
 fn main() {
-	// if unsafe { libc::getuid() } != 0 {
-	// 	println!("taskmasterctl must be run as root");
-	// 	return;
-	// }
-
 	let mut stream = UnixStream::connect("/tmp/taskmasterd.sock")
 		.expect("Could not connect to daemon");
 
@@ -179,6 +176,11 @@ fn main() {
 					Ok(request) => {
 						bincode::serialize_into(&mut stream, &request).unwrap();
 						stream.flush().unwrap();
+
+						if let TaskmasterDaemonRequest::Stop = request {
+							println!("Stop!");
+							break;
+						}
 
 						match bincode::deserialize_from::<&UnixStream, TaskmasterDaemonResult>(&mut stream).unwrap() {
 							TaskmasterDaemonResult::Success => {

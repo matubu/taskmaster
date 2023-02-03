@@ -537,6 +537,12 @@ fn handle_client_request(tasks: &mut MutexGuard<TaskFiles>, req: TaskmasterDaemo
 			}
 			TaskmasterDaemonResult::Success
 		},
+		TaskmasterDaemonRequest::Stop => {
+			for task_file in tasks.tasks_files.values_mut() {
+				task_file.stop();
+			}
+			std::process::exit(0);
+		},
 		TaskmasterDaemonRequest::StartTask(id) => {
 			if let Some(task) = tasks.find_by_id(id) {
 				task.start();
@@ -600,17 +606,18 @@ fn main() {
 	// Allow the taskmasterctl to connect to the socket
 	unsafe { libc::umask(0o755) };
 
-	let listener = bind("/tmp/taskmasterd.sock").expect("Could not create unix socket");
-
 	let stdout = File::create("/tmp/taskmasterd.out").unwrap();
 	let stderr = File::create("/tmp/taskmasterd.err").unwrap();
 	let daemonize = Daemonize::new()
 		.user(std::env::var("SUDO_USER").unwrap().as_str())
 		.group("nobody")
 		.stdout(stdout)
-		.stderr(stderr);
+		.stderr(stderr)
+		.pid_file("/tmp/taskmasterd.pid");
 
 	daemonize.start().expect("Failed to daemonize");
+
+	let listener = bind("/tmp/taskmasterd.sock").expect("Could not create unix socket");
 
 	println!("Starting taskmasterd...");
 

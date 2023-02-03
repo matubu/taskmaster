@@ -5,6 +5,7 @@ pub enum TaskmasterDaemonRequest {
 	Status,  // get the status of all process
 	Reload,  // reload all the configs and restart the processes
 	Restart, // restart all the processes
+	Stop,
 
 	StartTask(usize),
 	StopTask(usize),
@@ -13,8 +14,6 @@ pub enum TaskmasterDaemonRequest {
 
 	LoadFile(String),
 	UnloadFile(String),
-	
-	// Logs(String),
 }
 
 #[derive(Serialize, Deserialize, Debug)]
