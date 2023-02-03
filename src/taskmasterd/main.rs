@@ -34,8 +34,8 @@ struct TaskOptions {
 	autorestart: TaskOptionAutoRestart,
 	starttime_sec: u64,
 	retries: u64,
-	// stopsignal: ,
-	// stoptime_sec: ,
+	stopsignal: libc::c_int,
+	stoptime_sec: u64,
 	stdout: Option<String>,
 	stderr: Option<String>,
 	env: HashMap<String, String>,
@@ -45,8 +45,12 @@ struct TaskOptions {
 
 enum ExitStatus {
 	NotRunning,
-	Running{since: Instant, pid: u32},
 	LaunchFailed{at: Instant, err: String},
+	
+	Running{since: Instant, pid: u32},
+	
+	Stopping{at: Instant},
+	
 	Exited{at: Instant, code: i32},
 	Stopped{at: Instant},
 	Killed{at: Instant},
@@ -115,6 +119,13 @@ impl Process {
 		self.retries_count = 0;
 	}
 
+	fn graceful_stop(&mut self, stopsignal: libc::c_int) {
+		if let Some(child) = &mut self.process {
+			unsafe { libc::kill(child.id() as i32, stopsignal); }
+			self.current_status = ExitStatus::Stopping{at: Instant::now()};
+		}
+	}
+
 	fn stop(&mut self) {
 		if let Some(child) = &mut self.process {
 			child.kill();
@@ -127,12 +138,16 @@ impl Process {
 		if let Some(child) = &mut self.process {
 			if let Ok(Some(status)) = child.try_wait() {
 				let mut restart = opts.autorestart == TaskOptionAutoRestart::Always;
+
 				if let Some(code) = status.code() {
 					self.current_status = ExitStatus::Exited{at: Instant::now(), code};
 					if let TaskOptionAutoRestart::Unexpected(codes) = &opts.autorestart {
 						restart = !codes.contains(&code);
 					}
+				} else {
+					self.current_status = ExitStatus::Stopped{at: Instant::now()};
 				}
+
 				self.process = None;
 
 				if !restart || self.retries_count >= opts.retries {
@@ -140,6 +155,10 @@ impl Process {
 				}
 				self.retries_count += 1;
 				self.spawn(opts);
+			} else if let ExitStatus::Stopping { at } = &self.current_status {
+				if at.elapsed().as_secs() >= opts.stoptime_sec {
+					self.stop();
+				}
 			}
 		}
 	}
@@ -147,13 +166,14 @@ impl Process {
 	fn status(&self, opts: &TaskOptions) -> String {
 		(match &self.current_status {
 			ExitStatus::NotRunning => format!("\x1b[90mNot running"),
+			ExitStatus::LaunchFailed{at, err} => format!("\x1b[91mLaunch failed ({}s ago): {err}", at.elapsed().as_secs()),
 			ExitStatus::Running{since, pid} => {
 				let since = since.elapsed().as_secs();
 				format!("\x1b[92m{} (started {}s ago with pid {pid})",
-					if since >= opts.starttime_sec { "Running" } else { "Starting" },
+					if since >= opts.starttime_sec { "Running" } else { "Starting..." },
 					since)
 			},
-			ExitStatus::LaunchFailed{at, err} => format!("\x1b[91mLaunch failed ({}s ago): {err}", at.elapsed().as_secs()),
+			ExitStatus::Stopping { at } => format!("\x1b[93mStopping... ({}s ago)", at.elapsed().as_secs()),
 			ExitStatus::Exited{at, code} => format!("\x1b[91mExited ({}s ago) with code {code}", at.elapsed().as_secs()),
 			ExitStatus::Stopped{at} => format!("\x1b[93mStopped ({}s ago)", at.elapsed().as_secs()),
 			ExitStatus::Killed{at} => format!("\x1b[93mKilled ({}s ago)", at.elapsed().as_secs()),
@@ -194,6 +214,12 @@ impl Task {
 		}
 	}
 
+	fn graceful_stop(&mut self) {
+		for process in &mut self.processes {
+			process.graceful_stop(self.options.stopsignal);
+		}
+	}
+
 	fn stop(&mut self) {
 		for process in &mut self.processes {
 			process.stop();
@@ -230,6 +256,43 @@ impl Task {
 struct TaskFile {
 	path: String,
 	tasks: HashMap<String, Task>,
+}
+
+fn parse_signal(sig: &str) -> Option<libc::c_int>{
+	match sig {
+		"HUP" => Some(1),
+		"INT" => Some(2),
+		"QUIT" => Some(3),
+		"ILL" => Some(4),
+		"TRAP" => Some(5),
+		"ABRT" => Some(6),
+		"EMT" => Some(7),
+		"FPE" => Some(8),
+		"KILL" => Some(9),
+		"BUS" => Some(10),
+		"SEGV" => Some(11),
+		"SYS" => Some(12),
+		"PIPE" => Some(13),
+		"ALRM" => Some(14),
+		"TERM" => Some(15),
+		"URG" => Some(16),
+		"STOP" => Some(17),
+		"TSTP" => Some(18),
+		"CONT" => Some(19),
+		"CHLD" => Some(20),
+		"TTIN" => Some(21),
+		"TTOU" => Some(22),
+		"IO" => Some(23),
+		"XCPU" => Some(24),
+		"XFSZ" => Some(25),
+		"VTALRM" => Some(26),
+		"PROF" => Some(27),
+		"WINCH" => Some(28),
+		"INFO" => Some(29),
+		"USR1" => Some(30),
+		"USR2" => Some(31),
+		_ => None,
+	}
 }
 
 impl TaskFile {
@@ -286,6 +349,8 @@ impl TaskFile {
 						autorestart,
 						starttime_sec: get_optional!(value, "starttime", as_i64, 0) as u64,
 						retries: get_optional!(value, "retries", as_i64, 8) as u64,
+						stopsignal: parse_signal(get_optional!(value, "stopsignal", as_str, "TERM")).ok_or("Invalid stopsignal")?,
+						stoptime_sec: get_optional!(value, "stoptime", as_i64, 0) as u64,
 						stdout: value["stdout"].as_str().map(|s| s.to_owned()),
 						stderr: value["stderr"].as_str().map(|s| s.to_owned()),
 						env,
@@ -472,7 +537,7 @@ fn handle_client_request(tasks: &mut MutexGuard<TaskFiles>, req: TaskmasterDaemo
 		}
 		TaskmasterDaemonRequest::StopTask(id) => {
 			if let Some(task) = tasks.find_by_id(id) {
-				task.stop();
+				task.graceful_stop();
 				return TaskmasterDaemonResult::Success
 			}
 			TaskmasterDaemonResult::Err("Task not found".to_owned())

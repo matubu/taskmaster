@@ -60,3 +60,11 @@ programs:
   cat:
     cmd: cat
     starttime: 10
+    stoptime: 10
+    autorestart: "never"
+  
+  env:
+    cmd: env
+    stdout: /tmp/42
+    env:
+      THE_ANSWER: '42'
