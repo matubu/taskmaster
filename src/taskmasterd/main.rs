@@ -29,11 +29,11 @@ enum TaskOptionAutoRestart {
 #[derive(PartialEq, Clone, Debug)]
 struct TaskOptions {
 	argv: Vec<String>,
-	numprocs: i64,
+	numprocs: u64,
 	autostart: bool,
 	autorestart: TaskOptionAutoRestart,
-	// starttime_sec: u64,
-	retries: i64,
+	starttime_sec: u64,
+	retries: u64,
 	// stopsignal: ,
 	// stoptime_sec: ,
 	stdout: Option<String>,
@@ -55,7 +55,7 @@ enum ExitStatus {
 struct Process {
 	process: Option<Child>,
 	created_at: Instant,
-	retries_count: i64,
+	retries_count: u64,
 	current_status: ExitStatus
 }
 
@@ -144,10 +144,15 @@ impl Process {
 		}
 	}
 
-	fn status(&self) -> String {
+	fn status(&self, opts: &TaskOptions) -> String {
 		(match &self.current_status {
 			ExitStatus::NotRunning => format!("\x1b[90mNot running"),
-			ExitStatus::Running{since, pid} => format!("\x1b[92mRunning (started {}s ago with pid {pid})", since.elapsed().as_secs()),
+			ExitStatus::Running{since, pid} => {
+				let since = since.elapsed().as_secs();
+				format!("\x1b[92m{} (started {}s ago with pid {pid})",
+					if since >= opts.starttime_sec { "Running" } else { "Starting" },
+					since)
+			},
 			ExitStatus::LaunchFailed{at, err} => format!("\x1b[91mLaunch failed ({}s ago): {err}", at.elapsed().as_secs()),
 			ExitStatus::Exited{at, code} => format!("\x1b[91mExited ({}s ago) with code {code}", at.elapsed().as_secs()),
 			ExitStatus::Stopped{at} => format!("\x1b[93mStopped ({}s ago)", at.elapsed().as_secs()),
@@ -215,7 +220,7 @@ impl Task {
 		let mut status = String::new();
 
 		for i in 0..self.processes.len() {
-			status.push_str(&format!("{ident}[{i}] -> {}\n", self.processes[i].status()));
+			status.push_str(&format!("{ident}[{i}] -> {}\n", self.processes[i].status(&self.options)));
 		}
 
 		status
@@ -276,10 +281,11 @@ impl TaskFile {
 					task_file.tasks.insert(name.to_owned(),
 					Task::new(TaskOptions {
 						argv,
-						numprocs: get_optional!(value, "numprocs", as_i64, 1),
+						numprocs: get_optional!(value, "numprocs", as_i64, 1) as u64,
 						autostart: get_optional!(value, "autostart", as_bool, true),
 						autorestart,
-						retries: get_optional!(value, "retries", as_i64, 8),
+						starttime_sec: get_optional!(value, "starttime", as_i64, 0) as u64,
+						retries: get_optional!(value, "retries", as_i64, 8) as u64,
 						stdout: value["stdout"].as_str().map(|s| s.to_owned()),
 						stderr: value["stderr"].as_str().map(|s| s.to_owned()),
 						env,
