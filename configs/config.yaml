@@ -54,10 +54,8 @@ programs:
     cmd: echo test
     autostart: false
 
-# ---
+---
 
-# programs:
-#   brr:
-#     cmd: /bin/echo test
-#   test:
-#     cmd: ls
+programs:
+  cat:
+    cmd: cat

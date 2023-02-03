@@ -284,7 +284,7 @@ impl TaskFile {
 						stderr: value["stderr"].as_str().map(|s| s.to_owned()),
 						env,
 						workingdir: value["workingdir"].as_str().map(|s| s.to_owned()),
-						umask: get_optional!(value, "umask", as_i64, 0o777) as u16,
+						umask: u16::from_str_radix(get_optional!(value, "umask", as_str, "777"), 8).unwrap_or(0o777),
 					}));
 				}
 			}
